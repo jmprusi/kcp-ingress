@@ -3,13 +3,12 @@ module github.com/jmprusi/kcp-ingress
 go 1.16
 
 require (
-	github.com/kcp-dev/kcp v0.0.0-20210708142304-cb6715921c79
+	github.com/kcp-dev/kcp v0.0.0-20210713122714-51aa5823c8a5
 	golang.org/x/sys v0.0.0-20200928205150-006507a75852 // indirect
 	k8s.io/api v0.0.0
 	k8s.io/apimachinery v0.19.2
 	k8s.io/client-go v0.0.0
 	k8s.io/klog v1.0.0
-	sigs.k8s.io/kind v0.10.0 // indirect
 )
 
 replace (
