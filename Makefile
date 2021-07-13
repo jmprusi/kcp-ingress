@@ -1,13 +1,18 @@
 all: vendor build
 .PHONY: all
 
-# go-get-tool will 'go install' any package $2 and install it to $1.
+# go-get-tool will 'go get' any package $2 and install it to $1.
+# backing up and recovering the go.mod/go.sum as go install doesnt work
+# with project that use replacement directives, no time for a nicer solution.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
 define go-get-tool
 @[ -f $(1) ] || { \
 set -e ;\
 echo "Downloading $(2)" ;\
+mkdir -p $(PROJECT_DIR)/tmp ;\
+cp $(PROJECT_DIR)/{go.mod,go.sum} $(PROJECT_DIR)/tmp ;\
 GOBIN=$(PROJECT_DIR)/bin go get $(2) ;\
+cp $(PROJECT_DIR)/tmp/{go.mod,go.sum} $(PROJECT_DIR)/ ;\
 }
 endef
 

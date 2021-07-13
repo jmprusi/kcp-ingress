@@ -101,10 +101,10 @@ echo "Deploying Ingress controller to kind k8s clusters"
 kubectl config use-context kind-${KIND_CLUSTER_A}
 
 VERSION=$(curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/master/stable.txt)
-curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/localhost/${KIND_CLUSTER_A}.127.0.0.1.nip.io/g" | kubectl apply -f -
+curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
 
 kubectl config use-context kind-${KIND_CLUSTER_B}
-curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/localhost/${KIND_CLUSTER_B}.127.0.0.1.nip.io/g" | kubectl apply -f -
+curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
 
 } &>/dev/null
 
