@@ -332,6 +332,8 @@ github.com/kcp-dev/kcp v0.0.0-20210708142304-cb6715921c79 h1:xcVI3J8umHbOsae1oHo
 github.com/kcp-dev/kcp v0.0.0-20210708142304-cb6715921c79/go.mod h1:O8XbSmDQm4D9GLQ9XKJR4trdAg69JFemtu/y6rMFrSQ=
 github.com/kcp-dev/kcp v0.0.0-20210713122714-51aa5823c8a5 h1:iJxmQPfITBURwd7sC3iKx/rkK1nk8axnYUVvypnHTOM=
 github.com/kcp-dev/kcp v0.0.0-20210713122714-51aa5823c8a5/go.mod h1:/PVOaH8fZgLb6CarqxRbCKCukHEY1aqUY99tYqj+pZk=
+github.com/kcp-dev/kcp v0.0.0-20210718013749-eca93a6d9acd h1:IkqL/UtY2mklaEF1rtbF30CsMMhhtFmvcO4gV6iqjXM=
+github.com/kcp-dev/kcp v0.0.0-20210718013749-eca93a6d9acd/go.mod h1:/PVOaH8fZgLb6CarqxRbCKCukHEY1aqUY99tYqj+pZk=
 github.com/kcp-dev/kubernetes v0.0.0-20210504234152-98ac86830031/go.mod h1:Efg82S+Ti02A/Mww53bxroc7IgzX2bgPsf6hT8gAs3M=
 github.com/kcp-dev/kubernetes/staging/src/k8s.io/api v0.0.0-20210504234152-98ac86830031 h1:OnDaQzthDPSUE9nwo1nKSh3BhdJlW6sKDHmRhpiYlYE=
 github.com/kcp-dev/kubernetes/staging/src/k8s.io/api v0.0.0-20210504234152-98ac86830031/go.mod h1:oMzWB6/RPBLYAObltLVSu5Ms1ZztBe7G8s1ni2rZY7w=

@@ -3,7 +3,7 @@ module github.com/jmprusi/kcp-ingress
 go 1.16
 
 require (
-	github.com/kcp-dev/kcp v0.0.0-20210713122714-51aa5823c8a5
+	github.com/kcp-dev/kcp v0.0.0-20210718013749-eca93a6d9acd
 	golang.org/x/sys v0.0.0-20200928205150-006507a75852 // indirect
 	k8s.io/api v0.0.0
 	k8s.io/apimachinery v0.19.2
