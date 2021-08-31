@@ -37,6 +37,15 @@ kcp:
 local-setup: clean build kind kcp
 	./utils/local-setup.sh
 
+.PHONY: aws-setup
+aws-setup: clean kcp
+	./utils/aws-setup.sh --deploy
+
+.PHONY: aws-setup-clean
+aws-setup-clean:
+	./utils/aws-setup.sh --clean
+
+
 .PHONY: clean
 clean:
 	-rm -rf ./.kcp

@@ -25,7 +25,6 @@ cleanup() {
 
 GOROOT=$(go env GOROOT)
 export GOROOT
-export KUADRANT_NAMESPACE="kuadrant-system"
 export KIND_BIN="./bin/kind"
 export KCP_BIN="./bin/kcp"
 TEMP_DIR="./tmp"
