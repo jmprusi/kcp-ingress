@@ -4,9 +4,12 @@ import (
 	"context"
 	"time"
 
-	"k8s.io/api/networking/v1beta1"
-	networkingv1beta1client "k8s.io/client-go/kubernetes/typed/networking/v1beta1"
-	networkingv1beta1lister "k8s.io/client-go/listers/networking/v1beta1"
+	networkingv1alpha1 "github.com/jmprusi/kcp-ingress/pkg/client/clientset/versioned"
+	glbclient "github.com/jmprusi/kcp-ingress/pkg/client/clientset/versioned/typed/globalloadbalancer/v1alpha1"
+	networkingv1alpha1Informers "github.com/jmprusi/kcp-ingress/pkg/client/informers/externalversions"
+	v1 "k8s.io/api/networking/v1"
+	networkingv1client "k8s.io/client-go/kubernetes/typed/networking/v1"
+	networkingv1lister "k8s.io/client-go/listers/networking/v1"
 
 	clusterclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
 	"github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
@@ -29,45 +32,66 @@ const resyncPeriod = 10 * time.Hour
 // into N virtual Ingresses labeled for each Cluster that exists at the time
 // the Ingress is created.
 func NewController(cfg *rest.Config) *Controller {
-	client := networkingv1beta1client.NewForConfigOrDie(cfg)
+	networkingClient := networkingv1client.NewForConfigOrDie(cfg)
+	glbClient := glbclient.NewForConfigOrDie(cfg)
 	kubeClient := kubernetes.NewForConfigOrDie(cfg)
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	stopCh := make(chan struct{}) // TODO: hook this up to SIGTERM/SIGINT
 
 	csif := externalversions.NewSharedInformerFactoryWithOptions(clusterclient.NewForConfigOrDie(cfg), resyncPeriod)
-
 	c := &Controller{
-		queue:         queue,
-		client:        client,
-		clusterLister: csif.Cluster().V1alpha1().Clusters().Lister(),
-		kubeClient:    kubeClient,
-		stopCh:        stopCh,
+		queue:            queue,
+		networkingClient: networkingClient,
+		glbClient:        glbClient,
+		clusterLister:    csif.Cluster().V1alpha1().Clusters().Lister(),
+		kubeClient:       kubeClient,
+		stopCh:           stopCh,
 	}
 	csif.WaitForCacheSync(stopCh)
 	csif.Start(stopCh)
 
 	sif := informers.NewSharedInformerFactoryWithOptions(kubeClient, resyncPeriod)
-	sif.Networking().V1beta1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	//TODO(jmprusi): Handle deletion
+	sif.Networking().V1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.enqueue(obj) },
 		UpdateFunc: func(_, obj interface{}) { c.enqueue(obj) },
 	})
 	sif.WaitForCacheSync(stopCh)
 	sif.Start(stopCh)
 
-	c.indexer = sif.Networking().V1beta1().Ingresses().Informer().GetIndexer()
-	c.lister = sif.Networking().V1beta1().Ingresses().Lister()
+	//TODO(jmprusi): fix this with an EnqueueForOwner style of handler.
+	glbif := networkingv1alpha1Informers.NewSharedInformerFactory(networkingv1alpha1.NewForConfigOrDie(cfg), resyncPeriod)
+	glbif.Networking().V1alpha1().GlobalLoadBalancers().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj interface{}) { c.enqueue(obj) },
+		UpdateFunc: func(_, obj interface{}) { c.enqueue(obj) },
+	})
+	glbif.WaitForCacheSync(stopCh)
+	glbif.Start(stopCh)
+
+	c.indexer = sif.Networking().V1().Ingresses().Informer().GetIndexer()
+	c.lister = sif.Networking().V1().Ingresses().Lister()
 
 	return c
 }
 
 type Controller struct {
-	queue         workqueue.RateLimitingInterface
-	client        *networkingv1beta1client.NetworkingV1beta1Client
-	clusterLister clusterlisters.ClusterLister
-	kubeClient    kubernetes.Interface
-	stopCh        chan struct{}
-	indexer       cache.Indexer
-	lister        networkingv1beta1lister.IngressLister
+	queue            workqueue.RateLimitingInterface
+	networkingClient *networkingv1client.NetworkingV1Client
+	glbClient        *glbclient.NetworkingV1alpha1Client
+	clusterLister    clusterlisters.ClusterLister
+	kubeClient       kubernetes.Interface
+	stopCh           chan struct{}
+	indexer          cache.Indexer
+	lister           networkingv1lister.IngressLister
+}
+
+func (c *Controller) enqueueForOwner(obj interface{}) {
+	key, err := cache.MetaNamespaceKeyFunc(obj)
+	if err != nil {
+		runtime.HandleError(err)
+		return
+	}
+	c.queue.AddRateLimited(key)
 }
 
 func (c *Controller) enqueue(obj interface{}) {
@@ -122,7 +146,6 @@ func (c *Controller) handleErr(err error, key string) {
 	num := c.queue.NumRequeues(key)
 	if num < 5 {
 		klog.Errorf("Error reconciling key %q, retrying... (#%d): %v", key, num, err)
-		c.queue.AddRateLimited(key)
 		return
 	}
 
@@ -135,25 +158,27 @@ func (c *Controller) handleErr(err error, key string) {
 func (c *Controller) process(key string) error {
 	obj, exists, err := c.indexer.GetByKey(key)
 	if err != nil {
+		klog.Errorf("Error getting key %s from indexer %s", key, err)
 		return err
 	}
+	ctx := context.TODO()
 
+	// TODO(jmprusi): Handle deletion
 	if !exists {
 		klog.Infof("Object with key %q was deleted", key)
 		return nil
 	}
-	current := obj.(*v1beta1.Ingress)
 
+	current := obj.(*v1.Ingress)
 	previous := current.DeepCopy()
 
-	ctx := context.TODO()
 	if err := c.reconcile(ctx, current); err != nil {
 		return err
 	}
 
 	// If the object being reconciled changed as a result, update it.
 	if !equality.Semantic.DeepEqual(previous, current) {
-		_, uerr := c.client.Ingresses(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
+		_, uerr := c.networkingClient.Ingresses(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
 		return uerr
 	}
 

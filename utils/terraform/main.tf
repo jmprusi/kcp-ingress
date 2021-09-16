@@ -20,14 +20,52 @@ module "vpc" {
   }
 }
 
-resource "aws_route53_zone" "private" {
-  name = "example.com"
-
-  vpc {
-    vpc_id = module.vpc.vpc_id
-  }
-}
 variable "aws_region" {
   description = "Region where Cloud Formation is created"
   default     = "eu-west-1"
+}
+
+
+
+
+module "cluster-1" {
+  source             = "cloudowski/minikube/aws"
+  env_name           = "cluster-1-kcp"
+  subnet_id          = module.vpc.public_subnets[0]
+  vpc_id             = module.vpc.vpc_id
+  instance_type      = "t3a.large"
+  instance_disk_size = "25"
+}
+
+module "cluster-2" {
+  source             = "cloudowski/minikube/aws"
+  env_name           = "cluster-2-kcp"
+  subnet_id          = module.vpc.public_subnets[1]
+  vpc_id             = module.vpc.vpc_id
+  instance_type      = "t3a.large"
+  instance_disk_size = "25"
+}
+
+#####
+##  OUTPUTS
+#####
+
+output "cluster-1_ip" {
+  description = "IP address of the Minikube"
+  value       = module.cluster-1.public_ip
+}
+
+output "cluster-2_ip" {
+  description = "IP address of the Minikube"
+  value       = module.cluster-2.public_ip
+}
+
+output "cluster-1_kubeconfig" {
+  description = "cluster-1 kubeconfig"
+  value = module.cluster-1.kubeconfig
+}
+
+output "cluster-2_kubeconfig" {
+  description = "cluster-2 kubeconfig"
+  value = module.cluster-2.kubeconfig
 }

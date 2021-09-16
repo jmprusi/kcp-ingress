@@ -45,9 +45,9 @@ echo "Deleting any previous kind clusters."
 } &> /dev/null
 
 echo "Deploying two kind k8s clusters locally."
-{
 
-cat <<EOF | ${KIND_BIN} create cluster --name ${KIND_CLUSTER_A} --image kindest/node:v1.18.0 --config=-
+
+cat <<EOF | ${KIND_BIN} create cluster --name ${KIND_CLUSTER_A} --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -67,7 +67,7 @@ nodes:
     protocol: TCP
 EOF
 
-cat <<EOF | ${KIND_BIN} create cluster --name ${KIND_CLUSTER_B} --image kindest/node:v1.18.0 --config=-
+cat <<EOF | ${KIND_BIN} create cluster --name ${KIND_CLUSTER_B} --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -87,7 +87,6 @@ nodes:
     protocol: TCP
 EOF
 
-} &>/dev/null
 
 echo "Creating Cluster objects for each of the k8s cluster."
 

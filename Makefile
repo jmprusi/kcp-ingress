@@ -1,6 +1,8 @@
 all: vendor build
 .PHONY: all
 
+SHELL := /bin/bash
+
 # go-get-tool will 'go get' any package $2 and install it to $1.
 # backing up and recovering the go.mod/go.sum as go install doesnt work
 # with project that use replacement directives, no time for a nicer solution.
@@ -27,7 +29,7 @@ vendor:
 
 KIND = $(shell pwd)/bin/kind
 kind:
-	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.10.0)
+	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
 
 KCP = $(shell pwd)/bin/kcp
 kcp:
@@ -45,6 +47,9 @@ aws-setup: clean kcp
 aws-setup-clean:
 	./utils/aws-setup.sh --clean
 
+codegen:
+	./hack/update-codegen.sh
+.PHONY: codegen
 
 .PHONY: clean
 clean:

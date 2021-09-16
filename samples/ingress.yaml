@@ -1,17 +1,36 @@
-apiVersion: networking.k8s.io/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: test
+  name: echoserver-hostname
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
 spec:
   rules:
-    - host: foo.bar.com
+    - host: "foo.bar.com"
       http:
         paths:
-          - path: /path1
+          - path: /
+            pathType: Prefix
             backend:
-              serviceName: testsvc1
-              servicePort: 4201
-          - path: /path2
+              service:
+                name: echoserver
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: echoserver-nohostname
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
             backend:
-              serviceName: testsvc2
-              servicePort: 4202
+              service:
+                name: echoserver
+                port:
+                  number: 80

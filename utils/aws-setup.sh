@@ -39,26 +39,19 @@ mkdir -p ${TEMP_DIR}
 
 # Ok, this is far from ideal, but the module for deploying the k8s clusters looks for the
 # route53 to exist at the planning time... so we will have to do that in two steps.
-rm -f utils/terraform/minikube.tf
+# rm -f utils/terraform/minikube.tf
 terraform -chdir=utils/terraform/ init
 terraform -chdir=utils/terraform/ apply -auto-approve 
-cp utils/terraform/minikube.tf.disable utils/terraform/minikube.tf
-terraform -chdir=utils/terraform/ init
-terraform -chdir=utils/terraform/ apply -auto-approve 
+# cp utils/terraform/minikube.tf.disable utils/terraform/minikube.tf
+# terraform -chdir=utils/terraform/ init
+# terraform -chdir=utils/terraform/ apply -auto-approve 
 
 echo "Waiting 180 seconds for the remote clusters to be ready..."
 sleep 180
 
 echo "Getting remote clusters kubeconfigs"
-CLUSTER1_IP=$(terraform -chdir=utils/terraform output -raw cluster-1_ip)
-CLUSTER2_IP=$(terraform -chdir=utils/terraform output -raw cluster-2_ip)
-
-scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q centos@"${CLUSTER1_IP}":/home/centos/kubeconfig_ip ${TEMP_DIR}/cluster1_kubeconfig
-scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q centos@"${CLUSTER2_IP}":/home/centos/kubeconfig_ip ${TEMP_DIR}/cluster2_kubeconfig
-
-echo "Deploying ingress controller to each cluster"
-cat utils/terraform/ingress-controller.yaml | sed "s/@EXTERNALIP@/${CLUSTER1_IP}/" | KUBECONFIG=./tmp/cluster1_kubeconfig kubectl apply -f - 
-cat utils/terraform/ingress-controller.yaml | sed "s/@EXTERNALIP@/${CLUSTER2_IP}/" | KUBECONFIG=./tmp/cluster2_kubeconfig kubectl apply -f - 
+terraform -chdir=utils/terraform output -raw cluster-1_kubeconfig > ${TEMP_DIR}/cluster1_kubeconfig
+terraform -chdir=utils/terraform output -raw cluster-2_kubeconfig > ${TEMP_DIR}/cluster2_kubeconfig
 
 echo "Creating Cluster objects for each of the k8s cluster."
 

@@ -3,13 +3,18 @@ module github.com/jmprusi/kcp-ingress
 go 1.16
 
 require (
+	github.com/cloudflare/cloudflare-go v0.21.0
 	github.com/go-openapi/spec v0.0.0-20160808142527-6aced65f8501 // indirect
-	github.com/kcp-dev/kcp v0.0.0-20210830211213-b2d5aae0bef9
+	github.com/jpillora/go-tld v1.1.1
+	github.com/kcp-dev/kcp v0.0.0-20210901163808-7cbb0088235a
 	go.etcd.io/etcd v0.0.0-20191023171146-3cf2f69b5738 // indirect
-	k8s.io/api v0.0.0
-	k8s.io/apimachinery v0.19.2
+	k8s.io/api v0.21.3
+	k8s.io/apimachinery v0.21.3
 	k8s.io/client-go v0.0.0
+	k8s.io/code-generator v0.22.1
 	k8s.io/klog v1.0.0
+	k8s.io/kube-openapi v0.0.0-20210421082810-95288971da7e // indirect
+	sigs.k8s.io/controller-tools v0.6.2 // indirect
 	sigs.k8s.io/structured-merge-diff/v3 v3.0.0-20200116222232-67a7b8c61874 // indirect
 )
 
