@@ -25,11 +25,29 @@ Once the script is done, open a new terminal, and from the root of the project, 
 
 Now you can create a new ingress resource from the root of the project:
 
-```bash
+```bash 
 export KUBECONFIG=.kcp/data/admin.kubeconfig
 kubectl create namespace default
 kubectl apply -n default -f samples/ingress.yaml
 ```
+
+## Envoy control plane
+
+kcp-ingress contains a small control-plane for Envoy for local development purposes. It reads Ingress V1 resources and creates the Envoy configuration. It is not intended to be used in production, and doesn't cover all the features of Ingress v1.
+
+To enable it, run:
+
+```bash
+./bin/ingress-controller -kubeconfig .kcp/data/admin.kubeconfig -envoyxds
+```
+
+Then you can run the Envoy server using the bootstrap config provided:
+
+```bash
+envoy -c utils/envoy/bootstrap.yaml
+```
+
+By default, the Envoy server will listen on port 80, and that can be controlled with the `-envoy-listener-port` flag. 
 
 ## Overall diagram
 
