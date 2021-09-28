@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+
 	"github.com/jmprusi/kcp-ingress/pkg/reconciler/ingress"
 
 	"k8s.io/client-go/tools/clientcmd"
@@ -27,6 +28,8 @@ func main() {
 	if err != nil {
 		klog.Fatal(err)
 	}
+
+	klog.Infof("Starting ingress controller")
 
 	ingress.NewController(r).Start(numThreads)
 }
