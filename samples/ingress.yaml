@@ -1,17 +1,33 @@
-apiVersion: networking.k8s.io/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: test
+  name: ingress-domain
 spec:
   rules:
-    - host: foo.bar.com
+    - host: my-hostname.kcp-apps.127.0.0.1.nip.io
       http:
         paths:
-          - path: /path1
+          - path: /
+            pathType: Prefix
             backend:
-              serviceName: testsvc1
-              servicePort: 4201
-          - path: /path2
+              service:
+                name: httpecho
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-nondomain
+spec:
+  rules:
+    - host: host.whatever.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
             backend:
-              serviceName: testsvc2
-              servicePort: 4202
+              service:
+                name: httpecho
+                port:
+                  number: 80

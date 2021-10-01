@@ -45,9 +45,9 @@ echo "Deleting any previous kind clusters."
 } &> /dev/null
 
 echo "Deploying two kind k8s clusters locally."
-{
 
-cat <<EOF | ${KIND_BIN} create cluster --name ${KIND_CLUSTER_A} --image kindest/node:v1.18.0 --config=-
+
+cat <<EOF | ${KIND_BIN} create cluster --name ${KIND_CLUSTER_A} --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -67,7 +67,7 @@ nodes:
     protocol: TCP
 EOF
 
-cat <<EOF | ${KIND_BIN} create cluster --name ${KIND_CLUSTER_B} --image kindest/node:v1.18.0 --config=-
+cat <<EOF | ${KIND_BIN} create cluster --name ${KIND_CLUSTER_B} --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -87,7 +87,6 @@ nodes:
     protocol: TCP
 EOF
 
-} &>/dev/null
 
 echo "Creating Cluster objects for each of the k8s cluster."
 
@@ -101,9 +100,11 @@ kubectl config use-context kind-${KIND_CLUSTER_A}
 
 VERSION=$(curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/master/stable.txt)
 curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
+kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true" 
 
 kubectl config use-context kind-${KIND_CLUSTER_B}
 curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
+kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true" 
 
 } &>/dev/null
 
@@ -130,4 +131,3 @@ echo "Dont't forget to export the proper KUBECONFIG to create objects against KC
 echo "export KUBECONFIG=${PWD}/.kcp/data/admin.kubeconfig"
 echo ""
 read -p "Press enter to exit -> It will kill the KCP process running in background"
-

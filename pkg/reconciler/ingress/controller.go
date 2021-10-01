@@ -4,23 +4,24 @@ import (
 	"context"
 	"time"
 
-	"k8s.io/api/networking/v1beta1"
-	networkingv1beta1client "k8s.io/client-go/kubernetes/typed/networking/v1beta1"
-	networkingv1beta1lister "k8s.io/client-go/listers/networking/v1beta1"
-
+	"github.com/jmprusi/kcp-ingress/pkg/envoy"
 	clusterclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
 	"github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
 	clusterlisters "github.com/kcp-dev/kcp/pkg/client/listers/cluster/v1alpha1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	networkingv1client "k8s.io/client-go/kubernetes/typed/networking/v1"
+	networkingv1lister "k8s.io/client-go/listers/networking/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
+	envoyserver "knative.dev/net-kourier/pkg/envoy/server"
 )
 
 const resyncPeriod = 10 * time.Hour
@@ -28,13 +29,13 @@ const resyncPeriod = 10 * time.Hour
 // NewController returns a new Controller which splits new Ingress objects
 // into N virtual Ingresses labeled for each Cluster that exists at the time
 // the Ingress is created.
-func NewController(cfg *rest.Config) *Controller {
-	client := networkingv1beta1client.NewForConfigOrDie(cfg)
-	kubeClient := kubernetes.NewForConfigOrDie(cfg)
+func NewController(config *ControllerConfig) *Controller {
+	client := networkingv1client.NewForConfigOrDie(config.Cfg)
+	kubeClient := kubernetes.NewForConfigOrDie(config.Cfg)
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	stopCh := make(chan struct{}) // TODO: hook this up to SIGTERM/SIGINT
 
-	csif := externalversions.NewSharedInformerFactoryWithOptions(clusterclient.NewForConfigOrDie(cfg), resyncPeriod)
+	csif := externalversions.NewSharedInformerFactoryWithOptions(clusterclient.NewForConfigOrDie(config.Cfg), resyncPeriod)
 
 	c := &Controller{
 		queue:         queue,
@@ -42,32 +43,58 @@ func NewController(cfg *rest.Config) *Controller {
 		clusterLister: csif.Cluster().V1alpha1().Clusters().Lister(),
 		kubeClient:    kubeClient,
 		stopCh:        stopCh,
+		domain:        config.Domain,
 	}
+
+	if config.EnvoyXDS != nil {
+		c.envoyXDS = config.EnvoyXDS
+		c.cache = envoy.NewCache(envoy.NewTranslator(config.EnvoyListenPort))
+
+		go func() {
+			err := c.envoyXDS.RunManagementServer()
+			if err != nil {
+				panic(err)
+			}
+		}()
+	}
+
 	csif.WaitForCacheSync(stopCh)
 	csif.Start(stopCh)
 
 	sif := informers.NewSharedInformerFactoryWithOptions(kubeClient, resyncPeriod)
-	sif.Networking().V1beta1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	sif.Networking().V1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.enqueue(obj) },
 		UpdateFunc: func(_, obj interface{}) { c.enqueue(obj) },
+		DeleteFunc: func(obj interface{}) { c.enqueue(obj) },
 	})
 	sif.WaitForCacheSync(stopCh)
 	sif.Start(stopCh)
 
-	c.indexer = sif.Networking().V1beta1().Ingresses().Informer().GetIndexer()
-	c.lister = sif.Networking().V1beta1().Ingresses().Lister()
+	c.indexer = sif.Networking().V1().Ingresses().Informer().GetIndexer()
+	c.lister = sif.Networking().V1().Ingresses().Lister()
 
 	return c
 }
 
+type ControllerConfig struct {
+	Cfg             *rest.Config
+	EnvoyXDS        *envoyserver.XdsServer
+	Domain          *string
+	EnvoyListenPort *uint
+}
+
 type Controller struct {
-	queue         workqueue.RateLimitingInterface
-	client        *networkingv1beta1client.NetworkingV1beta1Client
-	clusterLister clusterlisters.ClusterLister
-	kubeClient    kubernetes.Interface
-	stopCh        chan struct{}
-	indexer       cache.Indexer
-	lister        networkingv1beta1lister.IngressLister
+	queue           workqueue.RateLimitingInterface
+	client          *networkingv1client.NetworkingV1Client
+	clusterLister   clusterlisters.ClusterLister
+	kubeClient      kubernetes.Interface
+	stopCh          chan struct{}
+	indexer         cache.Indexer
+	lister          networkingv1lister.IngressLister
+	envoyXDS        *envoyserver.XdsServer
+	envoyListenPort *uint
+	cache           *envoy.Cache
+	domain          *string
 }
 
 func (c *Controller) enqueue(obj interface{}) {
@@ -140,9 +167,14 @@ func (c *Controller) process(key string) error {
 
 	if !exists {
 		klog.Infof("Object with key %q was deleted", key)
+		if c.envoyXDS != nil {
+			// if EnvoyXDS is enabled, delete the Ingress from the cache and set the new snaphost.
+			c.cache.DeleteIngress(key)
+			c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
+		}
 		return nil
 	}
-	current := obj.(*v1beta1.Ingress)
+	current := obj.(*networkingv1.Ingress)
 
 	previous := current.DeepCopy()
 

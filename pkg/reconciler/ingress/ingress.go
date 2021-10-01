@@ -3,11 +3,14 @@ package ingress
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	"strings"
 	"time"
 
+	"github.com/jmprusi/kcp-ingress/pkg/envoy"
 	v1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/api/networking/v1beta1"
-
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -21,7 +24,7 @@ const (
 	pollInterval = time.Minute
 )
 
-func (c *Controller) reconcile(ctx context.Context, ingress *v1beta1.Ingress) error {
+func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingress) error {
 	klog.Infof("reconciling Ingress %q", ingress.Name)
 
 	if ingress.Labels == nil || ingress.Labels[clusterLabel] == "" {
@@ -53,7 +56,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress *v1beta1.Ingress) er
 			return err
 		}
 
-		var rootIngress *v1beta1.Ingress
+		var rootIngress *networkingv1.Ingress
 
 		rootIf, exists, err := c.indexer.Get(&v1beta1.Ingress{
 			ObjectMeta: metav1.ObjectMeta{
@@ -65,11 +68,12 @@ func (c *Controller) reconcile(ctx context.Context, ingress *v1beta1.Ingress) er
 		if err != nil {
 			return err
 		}
+
 		if !exists {
 			return fmt.Errorf("Root Ingress not found: %s", rootIngressName)
 		}
 
-		rootIngress = rootIf.(*v1beta1.Ingress)
+		rootIngress = rootIf.(*networkingv1.Ingress)
 
 		// Aggregating all the status from all the leafs for now.
 		// but we should just reflect the DNS returned by the global load balancer.
@@ -79,6 +83,21 @@ func (c *Controller) reconcile(ctx context.Context, ingress *v1beta1.Ingress) er
 		rootIngress.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{}
 		for _, o := range others {
 			rootIngress.Status.LoadBalancer.Ingress = append(rootIngress.Status.LoadBalancer.Ingress, o.Status.LoadBalancer.Ingress...)
+		}
+
+		// If the envoy controlplane is enabled, we update the cache and generate/send to envoy a new snapshot.
+		if c.envoyXDS != nil {
+			c.cache.UpdateIngress(*rootIngress)
+			err = c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
+			if err != nil {
+				return err
+			}
+
+			statusHost := generateStatusHost(c.domain, rootIngress)
+			// Now overwrite the Status of the rootIngress with our desired LB
+			rootIngress.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{{
+				Hostname: statusHost,
+			}}
 		}
 
 		if _, err := c.client.Ingresses(rootIngress.Namespace).UpdateStatus(ctx, rootIngress, metav1.UpdateOptions{}); err != nil {
@@ -93,11 +112,11 @@ func (c *Controller) reconcile(ctx context.Context, ingress *v1beta1.Ingress) er
 			return err
 		}
 	}
-
 	return nil
 }
 
-func (c *Controller) createLeafs(ctx context.Context, root *v1beta1.Ingress) error {
+// TODO(jmprusi): Parse the ingresses and find out in which cluster the destination service is.
+func (c *Controller) createLeafs(ctx context.Context, root *networkingv1.Ingress) error {
 	cls, err := c.clusterLister.List(labels.Everything())
 	if err != nil {
 		return err
@@ -112,43 +131,50 @@ func (c *Controller) createLeafs(ctx context.Context, root *v1beta1.Ingress) err
 		return nil
 	}
 
-	if len(cls) == 1 {
-		// nothing to split, just label Ingress for the only cluster.
-		if root.Labels == nil {
-			root.Labels = map[string]string{}
-		}
-
-		// TODO: munge cluster name
-		root.Labels[clusterLabel] = cls[0].Name
-		return nil
-	}
-
 	for _, cl := range cls {
 		vd := root.DeepCopy()
 		// TODO: munge cluster name
 		vd.Name = fmt.Sprintf("%s--%s", root.Name, cl.Name)
 
-		if vd.Labels == nil {
-			vd.Labels = map[string]string{}
-		}
+		vd.Labels = map[string]string{}
 		vd.Labels[clusterLabel] = cl.Name
 		vd.Labels[ownedByLabel] = root.Name
 
-		// Set OwnerReference so deleting the root Ingress deletes all virtual Ingresses
-		vd.OwnerReferences = []metav1.OwnerReference{{
-			APIVersion: "networking.k8s.io/v1beta1",
-			Kind:       "Ingress",
-			Name:       root.Name,
-			UID:        root.UID,
-		}}
-		// TODO: munge namespace
+		// Cleanup all the other owner references.
+		// TODO(jmprusi): Right now the syncer is syncing the OwnerReferences causing the ingresses to be deleted.
+		vd.OwnerReferences = []metav1.OwnerReference{}
 		vd.SetResourceVersion("")
-		if _, err := c.kubeClient.NetworkingV1beta1().Ingresses(root.Namespace).Create(ctx, vd,
-			metav1.CreateOptions{}); err != nil {
+
+		if _, err := c.kubeClient.NetworkingV1().Ingresses(root.Namespace).Create(ctx, vd, metav1.CreateOptions{}); err != nil {
 			return err
 		}
 		klog.Infof("created virtual Ingress %q", vd.Name)
 	}
 
 	return nil
+}
+
+func hashString(s string) string {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return fmt.Sprint(h.Sum32())
+}
+
+func generateStatusHost(domain *string, ingress *networkingv1.Ingress) string {
+
+	// TODO(jmprusi): using "contains" is a bad idea as it could be abused by crafting a malicious hostname, but for a PoC it should be good enough?
+	allRulesAreDomain := true
+	for _, rule := range ingress.Spec.Rules {
+		if !strings.Contains(rule.Host, *domain) {
+			allRulesAreDomain = false
+			break
+		}
+	}
+
+	//TODO(jmprusi): Hardcoded to the first one...
+	if allRulesAreDomain {
+		return ingress.Spec.Rules[0].Host
+	}
+
+	return hashString(ingress.Name+ingress.Namespace+ingress.ClusterName) + "." + *domain
 }
