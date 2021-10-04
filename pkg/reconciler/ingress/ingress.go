@@ -117,12 +117,29 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 
 // TODO(jmprusi): Parse the ingresses and find out in which cluster the destination service is.
 func (c *Controller) createLeafs(ctx context.Context, root *networkingv1.Ingress) error {
-	cls, err := c.clusterLister.List(labels.Everything())
+
+	// This will parse the ingresses and extract all the destination services,
+	// then create a new ingress leaf for each of them.
+	services, err := c.getServices(ctx, root)
 	if err != nil {
 		return err
 	}
 
-	if len(cls) == 0 {
+	var clusterDests []string
+	for _, service := range services {
+		if service.Labels[clusterLabel] != "" {
+			clusterDests = append(clusterDests, service.Labels[clusterLabel])
+		} else {
+			klog.Infof("Skipping service %q because it is not assigned to any cluster", service.Name)
+		}
+	}
+
+	// cls, err := c.clusterLister.List(labels.Everything())
+	// if err != nil {
+	// 	return err
+	// }
+
+	if len(clusterDests) == 0 {
 		// No status conditions... let's just leave it blank for now.
 		root.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{{
 			IP:       "",
@@ -131,13 +148,13 @@ func (c *Controller) createLeafs(ctx context.Context, root *networkingv1.Ingress
 		return nil
 	}
 
-	for _, cl := range cls {
+	for _, cl := range clusterDests {
 		vd := root.DeepCopy()
 		// TODO: munge cluster name
-		vd.Name = fmt.Sprintf("%s--%s", root.Name, cl.Name)
+		vd.Name = fmt.Sprintf("%s--%s", root.Name, cl)
 
 		vd.Labels = map[string]string{}
-		vd.Labels[clusterLabel] = cl.Name
+		vd.Labels[clusterLabel] = cl
 		vd.Labels[ownedByLabel] = root.Name
 
 		// Cleanup all the other owner references.
@@ -177,4 +194,20 @@ func generateStatusHost(domain *string, ingress *networkingv1.Ingress) string {
 	}
 
 	return hashString(ingress.Name+ingress.Namespace+ingress.ClusterName) + "." + *domain
+}
+
+// getServices will parse the ingress object and return a list of the services.
+func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingress) ([]*v1.Service, error) {
+	var services []*v1.Service
+	for _, rule := range ingress.Spec.Rules {
+		for _, path := range rule.HTTP.Paths {
+			svc, err := c.kubeClient.CoreV1().Services(ingress.Namespace).Get(ctx, path.Backend.Service.Name, metav1.GetOptions{})
+			// TODO(jmprusi): If one of the services doesn't exist, we invalidate all the other ones.. review this.
+			if err != nil {
+				return nil, err
+			}
+			services = append(services, svc)
+		}
+	}
+	return services, nil
 }
