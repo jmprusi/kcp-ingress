@@ -129,15 +129,12 @@ func (c *Controller) createLeafs(ctx context.Context, root *networkingv1.Ingress
 	for _, service := range services {
 		if service.Labels[clusterLabel] != "" {
 			clusterDests = append(clusterDests, service.Labels[clusterLabel])
+			// Trigger reconciliation of the root ingress when this service changes.
+			c.tracker.add(root, service)
 		} else {
 			klog.Infof("Skipping service %q because it is not assigned to any cluster", service.Name)
 		}
 	}
-
-	// cls, err := c.clusterLister.List(labels.Everything())
-	// if err != nil {
-	// 	return err
-	// }
 
 	if len(clusterDests) == 0 {
 		// No status conditions... let's just leave it blank for now.

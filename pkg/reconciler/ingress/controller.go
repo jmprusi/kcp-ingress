@@ -8,6 +8,7 @@ import (
 	clusterclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
 	"github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
 	clusterlisters "github.com/kcp-dev/kcp/pkg/client/listers/cluster/v1alpha1"
+	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,6 +45,7 @@ func NewController(config *ControllerConfig) *Controller {
 		kubeClient:    kubeClient,
 		stopCh:        stopCh,
 		domain:        config.Domain,
+		tracker:       *NewTracker(),
 	}
 
 	if config.EnvoyXDS != nil {
@@ -67,6 +69,12 @@ func NewController(config *ControllerConfig) *Controller {
 		UpdateFunc: func(_, obj interface{}) { c.enqueue(obj) },
 		DeleteFunc: func(obj interface{}) { c.enqueue(obj) },
 	})
+
+	sif.Core().V1().Services().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		UpdateFunc: func(_, obj interface{}) { c.ingressesFromService(obj) },
+		DeleteFunc: func(obj interface{}) { c.ingressesFromService(obj) },
+	})
+
 	sif.WaitForCacheSync(stopCh)
 	sif.Start(stopCh)
 
@@ -95,6 +103,7 @@ type Controller struct {
 	envoyListenPort *uint
 	cache           *envoy.Cache
 	domain          *string
+	tracker         Tracker
 }
 
 func (c *Controller) enqueue(obj interface{}) {
@@ -172,6 +181,8 @@ func (c *Controller) process(key string) error {
 			c.cache.DeleteIngress(key)
 			c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
 		}
+		// The ingress has been deleted, so we remove any tracking.
+		c.tracker.deleteIngress(key)
 		return nil
 	}
 	current := obj.(*networkingv1.Ingress)
@@ -190,4 +201,17 @@ func (c *Controller) process(key string) error {
 	}
 
 	return err
+}
+
+// ingressesFromService enqueues all the related ingresses for a given service.
+func (c *Controller) ingressesFromService(obj interface{}) {
+	ingresses, ok := c.tracker.getIngress(obj.(*v1.Service))
+	if ok {
+		for _, ingress := range ingresses {
+			klog.Infof("tracked service %q triggered Ingress %q reconciliation", obj.(*v1.Service).Name, ingress.Name)
+			c.enqueue(ingress.DeepCopy())
+		}
+	} else {
+		klog.Info("Ignoring non-tracked service: ", obj.(*v1.Service).Name)
+	}
 }
