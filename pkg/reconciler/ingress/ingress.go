@@ -33,18 +33,57 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 		if err != nil {
 			return err
 		}
-		leafs, err := c.lister.List(sel)
+
+		// Get the current Leaves
+		currentLeaves, err := c.lister.List(sel)
 		if err != nil {
 			return err
 		}
 
-		if len(leafs) == 0 {
-			if err := c.createLeafs(ctx, ingress); err != nil {
+		// Generate the desired leaves
+		desiredLeaves, err := c.desiredLeaves(ctx, ingress)
+		if err != nil {
+			return err
+		}
+
+		// Clean the leaves that are not desired anymore
+		for _, leaftoremove := range findNonDesiredLeaves(currentLeaves, desiredLeaves) {
+			klog.Infof("Deleting non desired leaf %q", leaftoremove.Name)
+			if err := c.kubeClient.NetworkingV1().Ingresses(leaftoremove.Namespace).Delete(ctx, leaftoremove.Name, metav1.DeleteOptions{}); err != nil {
 				return err
 			}
 		}
 
+		// TODO(jmprusi): ugly. fix. use indexer...
+		// Create and/or update the desired leaves
+		for _, desiredleaf := range desiredLeaves {
+			if _, err := c.kubeClient.NetworkingV1().Ingresses(desiredleaf.Namespace).Create(ctx, desiredleaf, metav1.CreateOptions{}); err != nil {
+				if errors.IsAlreadyExists(err) {
+					existingLeaf, err := c.kubeClient.NetworkingV1().Ingresses(desiredleaf.Namespace).Get(ctx, desiredleaf.Name, metav1.GetOptions{})
+					if err != nil {
+						return err
+					}
+
+					// Set the resourceVersion and UID to update the desired leaf.
+					desiredleaf.ResourceVersion = existingLeaf.ResourceVersion
+					desiredleaf.UID = existingLeaf.UID
+
+					if _, err := c.kubeClient.NetworkingV1().Ingresses(desiredleaf.Namespace).Update(ctx, desiredleaf, metav1.UpdateOptions{}); err != nil {
+						return err
+					}
+
+				} else {
+					return err
+				}
+			}
+		}
+
 	} else {
+		// If the ingress has the clusterLabel set, that means that it is a leaf and it's synced with
+		// a cluster.
+		//
+		// This update can come from the creation or because the syncer has update the status.
+
 		rootIngressName := ingress.Labels[ownedByLabel]
 		// A leaf Ingress was updated; get others and aggregate status.
 		sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, rootIngressName))
@@ -56,6 +95,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 			return err
 		}
 
+		// Get the rootIngress based on the labels.
 		var rootIngress *networkingv1.Ingress
 
 		rootIf, exists, err := c.indexer.Get(&v1beta1.Ingress{
@@ -69,15 +109,12 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 			return err
 		}
 
+		// TODO(jmprusi): A leaf without rootIngress?
 		if !exists {
 			return fmt.Errorf("Root Ingress not found: %s", rootIngressName)
 		}
 
-		rootIngress = rootIf.(*networkingv1.Ingress)
-
-		// Aggregating all the status from all the leafs for now.
-		// but we should just reflect the DNS returned by the global load balancer.
-		rootIngress = rootIngress.DeepCopy()
+		rootIngress = rootIf.(*networkingv1.Ingress).DeepCopy()
 
 		// Clean the current status, and then recreate if from the other leafs.
 		rootIngress.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{}
@@ -85,7 +122,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 			rootIngress.Status.LoadBalancer.Ingress = append(rootIngress.Status.LoadBalancer.Ingress, o.Status.LoadBalancer.Ingress...)
 		}
 
-		// If the envoy controlplane is enabled, we update the cache and generate/send to envoy a new snapshot.
+		// If the envoy controlplane is enabled, we update the cache and generate and send to envoy a new snapshot.
 		if c.envoyXDS != nil {
 			c.cache.UpdateIngress(*rootIngress)
 			err = c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
@@ -100,6 +137,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 			}}
 		}
 
+		// Update the rootIngress status with our desired LB.
 		if _, err := c.client.Ingresses(rootIngress.Namespace).UpdateStatus(ctx, rootIngress, metav1.UpdateOptions{}); err != nil {
 			if errors.IsConflict(err) {
 				key, err := cache.MetaNamespaceKeyFunc(ingress)
@@ -115,14 +153,12 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 	return nil
 }
 
-// TODO(jmprusi): Parse the ingresses and find out in which cluster the destination service is.
-func (c *Controller) createLeafs(ctx context.Context, root *networkingv1.Ingress) error {
-
+func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingress) ([]*networkingv1.Ingress, error) {
 	// This will parse the ingresses and extract all the destination services,
 	// then create a new ingress leaf for each of them.
 	services, err := c.getServices(ctx, root)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var clusterDests []string
@@ -142,9 +178,10 @@ func (c *Controller) createLeafs(ctx context.Context, root *networkingv1.Ingress
 			IP:       "",
 			Hostname: "",
 		}}
-		return nil
+		return nil, nil
 	}
 
+	desiredLeaves := make([]*networkingv1.Ingress, 0, len(clusterDests))
 	for _, cl := range clusterDests {
 		vd := root.DeepCopy()
 		// TODO: munge cluster name
@@ -159,13 +196,10 @@ func (c *Controller) createLeafs(ctx context.Context, root *networkingv1.Ingress
 		vd.OwnerReferences = []metav1.OwnerReference{}
 		vd.SetResourceVersion("")
 
-		if _, err := c.kubeClient.NetworkingV1().Ingresses(root.Namespace).Create(ctx, vd, metav1.CreateOptions{}); err != nil {
-			return err
-		}
-		klog.Infof("created virtual Ingress %q", vd.Name)
+		desiredLeaves = append(desiredLeaves, vd)
 	}
 
-	return nil
+	return desiredLeaves, nil
 }
 
 func hashString(s string) string {
@@ -207,4 +241,22 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 		}
 	}
 	return services, nil
+}
+
+func findNonDesiredLeaves(current, desired []*networkingv1.Ingress) []*networkingv1.Ingress {
+	var missing []*networkingv1.Ingress
+
+	for _, c := range current {
+		found := false
+		for _, d := range desired {
+			if c.Name == d.Name {
+				found = true
+			}
+		}
+		if !found {
+			missing = append(missing, c)
+		}
+	}
+
+	return missing
 }

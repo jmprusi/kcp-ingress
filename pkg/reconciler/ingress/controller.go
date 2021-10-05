@@ -176,12 +176,13 @@ func (c *Controller) process(key string) error {
 
 	if !exists {
 		klog.Infof("Object with key %q was deleted", key)
+		// If Envoy is enabled, delete the Ingress from the config cache.
 		if c.envoyXDS != nil {
 			// if EnvoyXDS is enabled, delete the Ingress from the cache and set the new snaphost.
 			c.cache.DeleteIngress(key)
 			c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
 		}
-		// The ingress has been deleted, so we remove any tracking.
+		// The ingress has been deleted, so we remove any ingress to service tracking.
 		c.tracker.deleteIngress(key)
 		return nil
 	}
