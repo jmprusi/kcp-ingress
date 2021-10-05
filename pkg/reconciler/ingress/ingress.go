@@ -54,7 +54,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 			}
 		}
 
-		// TODO(jmprusi): ugly. fix. use indexer...
+		// TODO(jmprusi): ugly. fix. use indexer, etc.
 		// Create and/or update the desired leaves
 		for _, desiredleaf := range desiredLeaves {
 			if _, err := c.kubeClient.NetworkingV1().Ingresses(desiredleaf.Namespace).Create(ctx, desiredleaf, metav1.CreateOptions{}); err != nil {
@@ -165,11 +165,12 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 	for _, service := range services {
 		if service.Labels[clusterLabel] != "" {
 			clusterDests = append(clusterDests, service.Labels[clusterLabel])
-			// Trigger reconciliation of the root ingress when this service changes.
-			c.tracker.add(root, service)
 		} else {
 			klog.Infof("Skipping service %q because it is not assigned to any cluster", service.Name)
 		}
+
+		// Trigger reconciliation of the root ingress when this service changes.
+		c.tracker.add(root, service)
 	}
 
 	if len(clusterDests) == 0 {

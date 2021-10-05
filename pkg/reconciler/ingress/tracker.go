@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/klog"
 
 	v1 "k8s.io/api/core/v1"
 )
@@ -31,6 +32,7 @@ func (t *Tracker) getIngress(service *v1.Service) ([]networkingv1.Ingress, bool)
 func (t *Tracker) add(ingress *networkingv1.Ingress, s *v1.Service) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	klog.Infof("tracking service %q for ingress %q", s.Name, ingress.Name)
 	for _, ti := range t.trackedServices[serviceToKey(s)] {
 		if ingressToKey(&ti) == ingressToKey(ingress) {
 			return
