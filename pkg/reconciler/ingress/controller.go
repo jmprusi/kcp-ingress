@@ -5,9 +5,6 @@ import (
 	"time"
 
 	"github.com/jmprusi/kcp-ingress/pkg/envoy"
-	clusterclient "github.com/kcp-dev/kcp/pkg/client/clientset/versioned"
-	"github.com/kcp-dev/kcp/pkg/client/informers/externalversions"
-	clusterlisters "github.com/kcp-dev/kcp/pkg/client/listers/cluster/v1alpha1"
 	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -36,16 +33,13 @@ func NewController(config *ControllerConfig) *Controller {
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	stopCh := make(chan struct{}) // TODO: hook this up to SIGTERM/SIGINT
 
-	csif := externalversions.NewSharedInformerFactoryWithOptions(clusterclient.NewForConfigOrDie(config.Cfg), resyncPeriod)
-
 	c := &Controller{
-		queue:         queue,
-		client:        client,
-		clusterLister: csif.Cluster().V1alpha1().Clusters().Lister(),
-		kubeClient:    kubeClient,
-		stopCh:        stopCh,
-		domain:        config.Domain,
-		tracker:       *NewTracker(),
+		queue:      queue,
+		client:     client,
+		kubeClient: kubeClient,
+		stopCh:     stopCh,
+		domain:     config.Domain,
+		tracker:    *NewTracker(),
 	}
 
 	if config.EnvoyXDS != nil {
@@ -59,9 +53,6 @@ func NewController(config *ControllerConfig) *Controller {
 			}
 		}()
 	}
-
-	csif.WaitForCacheSync(stopCh)
-	csif.Start(stopCh)
 
 	sif := informers.NewSharedInformerFactoryWithOptions(kubeClient, resyncPeriod)
 	sif.Networking().V1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -94,7 +85,6 @@ type ControllerConfig struct {
 type Controller struct {
 	queue           workqueue.RateLimitingInterface
 	client          *networkingv1client.NetworkingV1Client
-	clusterLister   clusterlisters.ClusterLister
 	kubeClient      kubernetes.Interface
 	stopCh          chan struct{}
 	indexer         cache.Indexer
