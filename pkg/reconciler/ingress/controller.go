@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	networkingv1client "k8s.io/client-go/kubernetes/typed/networking/v1"
 	networkingv1lister "k8s.io/client-go/listers/networking/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -28,18 +27,17 @@ const resyncPeriod = 10 * time.Hour
 // into N virtual Ingresses labeled for each Cluster that exists at the time
 // the Ingress is created.
 func NewController(config *ControllerConfig) *Controller {
-	client := networkingv1client.NewForConfigOrDie(config.Cfg)
-	kubeClient := kubernetes.NewForConfigOrDie(config.Cfg)
+
+	client := kubernetes.NewForConfigOrDie(config.Cfg)
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	stopCh := make(chan struct{}) // TODO: hook this up to SIGTERM/SIGINT
 
 	c := &Controller{
-		queue:      queue,
-		client:     client,
-		kubeClient: kubeClient,
-		stopCh:     stopCh,
-		domain:     config.Domain,
-		tracker:    *NewTracker(),
+		queue:   queue,
+		client:  client,
+		stopCh:  stopCh,
+		domain:  config.Domain,
+		tracker: *NewTracker(),
 	}
 
 	if config.EnvoyXDS != nil {
@@ -54,13 +52,16 @@ func NewController(config *ControllerConfig) *Controller {
 		}()
 	}
 
-	sif := informers.NewSharedInformerFactoryWithOptions(kubeClient, resyncPeriod)
+	sif := informers.NewSharedInformerFactoryWithOptions(c.client, resyncPeriod)
+
+	// Watch for events related to Ingresses
 	sif.Networking().V1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.enqueue(obj) },
 		UpdateFunc: func(_, obj interface{}) { c.enqueue(obj) },
 		DeleteFunc: func(obj interface{}) { c.enqueue(obj) },
 	})
 
+	// Watch for events related to Services
 	sif.Core().V1().Services().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: func(_, obj interface{}) { c.ingressesFromService(obj) },
 		DeleteFunc: func(obj interface{}) { c.ingressesFromService(obj) },
@@ -84,8 +85,7 @@ type ControllerConfig struct {
 
 type Controller struct {
 	queue           workqueue.RateLimitingInterface
-	client          *networkingv1client.NetworkingV1Client
-	kubeClient      kubernetes.Interface
+	client          kubernetes.Interface
 	stopCh          chan struct{}
 	indexer         cache.Indexer
 	lister          networkingv1lister.IngressLister
@@ -187,7 +187,7 @@ func (c *Controller) process(key string) error {
 
 	// If the object being reconciled changed as a result, update it.
 	if !equality.Semantic.DeepEqual(previous, current) {
-		_, uerr := c.client.Ingresses(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
+		_, uerr := c.client.NetworkingV1().Ingresses(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
 		return uerr
 	}
 
@@ -196,8 +196,10 @@ func (c *Controller) process(key string) error {
 
 // ingressesFromService enqueues all the related ingresses for a given service.
 func (c *Controller) ingressesFromService(obj interface{}) {
+	// Does that Service has any Ingress associated to?
 	ingresses, ok := c.tracker.getIngress(obj.(*v1.Service))
 	if ok {
+		// One Service can be referenced by 0..n Ingresses, so we need to enqueue all the related ingreses.
 		for _, ingress := range ingresses {
 			klog.Infof("tracked service %q triggered Ingress %q reconciliation", obj.(*v1.Service).Name, ingress.Name)
 			c.enqueue(ingress.DeepCopy())
