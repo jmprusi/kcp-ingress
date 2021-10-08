@@ -49,7 +49,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 		// Clean the leaves that are not desired anymore
 		for _, leaftoremove := range findNonDesiredLeaves(currentLeaves, desiredLeaves) {
 			klog.Infof("Deleting non desired leaf %q", leaftoremove.Name)
-			if err := c.kubeClient.NetworkingV1().Ingresses(leaftoremove.Namespace).Delete(ctx, leaftoremove.Name, metav1.DeleteOptions{}); err != nil {
+			if err := c.client.NetworkingV1().Ingresses(leaftoremove.Namespace).Delete(ctx, leaftoremove.Name, metav1.DeleteOptions{}); err != nil {
 				return err
 			}
 		}
@@ -57,9 +57,9 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 		// TODO(jmprusi): ugly. fix. use indexer, etc.
 		// Create and/or update the desired leaves
 		for _, desiredleaf := range desiredLeaves {
-			if _, err := c.kubeClient.NetworkingV1().Ingresses(desiredleaf.Namespace).Create(ctx, desiredleaf, metav1.CreateOptions{}); err != nil {
+			if _, err := c.client.NetworkingV1().Ingresses(desiredleaf.Namespace).Create(ctx, desiredleaf, metav1.CreateOptions{}); err != nil {
 				if errors.IsAlreadyExists(err) {
-					existingLeaf, err := c.kubeClient.NetworkingV1().Ingresses(desiredleaf.Namespace).Get(ctx, desiredleaf.Name, metav1.GetOptions{})
+					existingLeaf, err := c.client.NetworkingV1().Ingresses(desiredleaf.Namespace).Get(ctx, desiredleaf.Name, metav1.GetOptions{})
 					if err != nil {
 						return err
 					}
@@ -68,7 +68,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 					desiredleaf.ResourceVersion = existingLeaf.ResourceVersion
 					desiredleaf.UID = existingLeaf.UID
 
-					if _, err := c.kubeClient.NetworkingV1().Ingresses(desiredleaf.Namespace).Update(ctx, desiredleaf, metav1.UpdateOptions{}); err != nil {
+					if _, err := c.client.NetworkingV1().Ingresses(desiredleaf.Namespace).Update(ctx, desiredleaf, metav1.UpdateOptions{}); err != nil {
 						return err
 					}
 
@@ -138,7 +138,7 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 		}
 
 		// Update the rootIngress status with our desired LB.
-		if _, err := c.client.Ingresses(rootIngress.Namespace).UpdateStatus(ctx, rootIngress, metav1.UpdateOptions{}); err != nil {
+		if _, err := c.client.NetworkingV1().Ingresses(rootIngress.Namespace).UpdateStatus(ctx, rootIngress, metav1.UpdateOptions{}); err != nil {
 			if errors.IsConflict(err) {
 				key, err := cache.MetaNamespaceKeyFunc(ingress)
 				if err != nil {
@@ -233,7 +233,7 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 	var services []*v1.Service
 	for _, rule := range ingress.Spec.Rules {
 		for _, path := range rule.HTTP.Paths {
-			svc, err := c.kubeClient.CoreV1().Services(ingress.Namespace).Get(ctx, path.Backend.Service.Name, metav1.GetOptions{})
+			svc, err := c.client.CoreV1().Services(ingress.Namespace).Get(ctx, path.Backend.Service.Name, metav1.GetOptions{})
 			// TODO(jmprusi): If one of the services doesn't exist, we invalidate all the other ones.. review this.
 			if err != nil {
 				return nil, err
