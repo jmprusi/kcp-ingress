@@ -32,11 +32,12 @@ kind:
 	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
 
 # Not ideal, fix when possible.
+# Building the 2-steps-syncing branch from davidfestal fork.
 KCP = $(shell pwd)/bin/kcp
 kcp:
 	rm -rf ./tmp/kcp
-	git clone --depth=1 https://github.com/kcp-dev/kcp ./tmp/kcp
-	cd ./tmp/kcp && go build -o ../../bin/kcp cmd/kcp/kcp.go
+	git clone https://github.com/davidfestal/kcp ./tmp/kcp
+	cd ./tmp/kcp && git checkout 2-steps-syncing && sed -i -e 's:=>  *github\.com/kcp-dev/\(kubernetes[^ ]*\) ..*:=> ../../../\1:' "./go.mod" && go mod vendor -v && go build -o ../../bin/kcp cmd/kcp/kcp.go
 	rm -rf ./tmp/kcp
 
 .PHONY: local-setup

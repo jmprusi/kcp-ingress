@@ -10,7 +10,22 @@
 			"request": "launch",
 			"mode": "auto",
 			"program": "${workspaceFolder}/cmd/ingress-controller",
-			"args": ["-kubeconfig","${workspaceFolder}/.kcp/data/admin.kubeconfig"]
+			"args": [
+				"-kubeconfig",
+				"${workspaceFolder}/.kcp/data/admin.kubeconfig"
+			]
+		},
+		{
+			"name": "Run Ingress Controller Envoy enabled",
+			"type": "go",
+			"request": "launch",
+			"mode": "auto",
+			"program": "${workspaceFolder}/cmd/ingress-controller",
+			"args": [
+				"-kubeconfig",
+				"${workspaceFolder}/.kcp/data/admin.kubeconfig",
+				"-envoyxds"
+			]
 		}
 	]
 }

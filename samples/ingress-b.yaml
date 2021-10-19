@@ -2,26 +2,14 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ingress-domain
+  annotations:
+    kcp.dev/assigned-locations: "kcp-cluster-b"
+  labels:
+    kcp.dev/transformer: "ingress-transformer"
+    kcp.dev/cluster: ""
 spec:
   rules:
     - host: my-hostname.kcp-apps.127.0.0.1.nip.io
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: httpecho
-                port:
-                  number: 80
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ingress-nondomain
-spec:
-  rules:
-    - host: host.whatever.com
       http:
         paths:
           - path: /

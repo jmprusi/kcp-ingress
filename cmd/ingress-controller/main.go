@@ -3,16 +3,18 @@ package main
 import (
 	"flag"
 
-	"github.com/jmprusi/kcp-ingress/pkg/reconciler/ingress"
+	ingressSyncing "github.com/jmprusi/kcp-ingress/pkg/syncing/ingress"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog"
-	envoyserver "knative.dev/net-kourier/pkg/envoy/server"
+	"knative.dev/net-kourier/pkg/envoy/server"
 )
 
 const numThreads = 2
 
 var kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig")
-var kubecontext = flag.String("context", "", "Context to use in the Kubeconfig file, instead of the current context")
+
+// TODO(jmprusi): enable this as override.
+// var kubecontext = flag.String("context", "", "Context to use in the Kubeconfig file, instead of the current context")
 
 var envoyEnableXDS = flag.Bool("envoyxds", false, "Start an Envoy control plane")
 var envoyXDSPort = flag.Uint("envoyxds-port", 18000, "Envoy control plane port")
@@ -26,27 +28,23 @@ var envoyListenPort = flag.Uint("envoy-listener-port", 80, "Envoy default listen
 func main() {
 	flag.Parse()
 
-	var overrides clientcmd.ConfigOverrides
-	if *kubecontext != "" {
-		overrides.CurrentContext = *kubecontext
-	}
-
-	r, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		&clientcmd.ClientConfigLoadingRules{ExplicitPath: *kubeconfig},
-		&overrides).ClientConfig()
+	kubeconfig, err := clientcmd.LoadFromFile(*kubeconfig)
 	if err != nil {
 		klog.Fatal(err)
 	}
 
-	controllerConfig := &ingress.ControllerConfig{
-		Cfg:    r,
-		Domain: domain,
+	config := &ingressSyncing.SyncingConfig{
+		Kubeconfig:      kubeconfig,
+		EnvoyXDS:        nil,
+		Domain:          domain,
+		EnvoyListenPort: envoyListenPort,
 	}
 
 	if *envoyEnableXDS {
-		controllerConfig.EnvoyXDS = envoyserver.NewXdsServer(*envoyXDSPort, nil)
-		controllerConfig.EnvoyListenPort = envoyListenPort
+		config.EnvoyXDS = server.NewXdsServer(*envoyXDSPort, nil)
 	}
 
-	ingress.NewController(controllerConfig).Start(numThreads)
+	syncing := ingressSyncing.NewIngressSyncing(config)
+	klog.Infof("Starting ingress syncing")
+	syncing.WaitUntilDone()
 }

@@ -39,10 +39,11 @@ func (c *Cache) UpdateIngress(ingress networkingv1.Ingress) {
 	c.ingresses.Add(ingressToKey(ingress), ingress, gocache.NoExpiration)
 }
 
-func (c *Cache) DeleteIngress(key string) {
+// TODO(jmprusi): Lacks location.
+func (c *Cache) DeleteIngress(name, namespace string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.ingresses.Delete(key)
+	c.ingresses.Delete(namespace + "#$#" + name)
 }
 
 func (c *Cache) ToEnvoySnapshot() cache.Snapshot {
@@ -74,5 +75,5 @@ func (c *Cache) ToEnvoySnapshot() cache.Snapshot {
 }
 
 func ingressToKey(ingress networkingv1.Ingress) string {
-	return ingress.Namespace + "/" + ingress.ClusterName + "#$#" + ingress.Name
+	return ingress.Namespace + "#$#" + ingress.Name
 }
