@@ -109,14 +109,14 @@ kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class
 } &>/dev/null
 
 echo "Starting KCP, sending logs to ${KCP_LOG_FILE}"
-${KCP_BIN} start --push_mode --install_cluster_controller --resources_to_sync=services --resources_to_sync=ingresses.networking.k8s.io --auto_publish_apis > ${KCP_LOG_FILE} 2>&1 &
+${KCP_BIN} start --push-mode --install-cluster-controller --resources_to_sync=deployments --resources-to-sync=services --resources-to-sync=ingresses.networking.k8s.io --auto-publish-apis > ${KCP_LOG_FILE} 2>&1 &
 KCP_PID=$!
 
 echo "Waiting 15 seconds..."
 sleep 15
 
-echo "Exporting KUBECONFIG=.kcp/data/admin.kubeconfig"
-export KUBECONFIG=.kcp/data/admin.kubeconfig
+echo "Exporting KUBECONFIG=.kcp/admin.kubeconfig"
+export KUBECONFIG=.kcp/admin.kubeconfig
 
 echo "Registering kind k8s clusters into KCP"
 kubectl apply -f ./tmp/
@@ -125,9 +125,9 @@ echo ""
 echo "The kind k8s clusters have been registered, and KCP is running, now you should run the kcp-ingress"
 echo "example: "
 echo ""
-echo "       ./bin/ingress-controller -kubeconfig .kcp/data/admin.kubeconfig"
+echo "       ./bin/ingress-controller -kubeconfig .kcp/admin.kubeconfig"
 echo ""
 echo "Dont't forget to export the proper KUBECONFIG to create objects against KCP:"
-echo "export KUBECONFIG=${PWD}/.kcp/data/admin.kubeconfig"
+echo "export KUBECONFIG=${PWD}/.kcp/admin.kubeconfig"
 echo ""
 read -p "Press enter to exit -> It will kill the KCP process running in background"
