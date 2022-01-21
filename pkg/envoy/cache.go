@@ -1,6 +1,7 @@
 package envoy
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	cachetypes "github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	envoycachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
+	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"github.com/google/uuid"
 	gocache "github.com/patrickmn/go-cache"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -62,15 +64,20 @@ func (c *Cache) ToEnvoySnapshot() cache.Snapshot {
 	hcm := c.translator.newHTTPConnectionManager(routeConfig.Name)
 	listener, _ := c.translator.newHTTPListener(hcm)
 
-	return envoycachev3.NewSnapshot(
+	res := make(map[resource.Type][]cachetypes.Resource, 0)
+
+	res[resource.RouteType] = []cachetypes.Resource{routeConfig}
+	res[resource.ListenerType] = []cachetypes.Resource{listener}
+	res[resource.ClusterType] = clustersResources
+
+	newSnapshot, err := envoycachev3.NewSnapshot(
 		uuid.NewString(),
-		make([]cachetypes.Resource, 0),
-		clustersResources,
-		[]cachetypes.Resource{routeConfig},
-		[]cachetypes.Resource{listener},
-		make([]cachetypes.Resource, 0),
-		make([]cachetypes.Resource, 0),
+		res,
 	)
+	if err != nil {
+		log.Printf("failed to create snapshot: %v", err)
+	}
+	return newSnapshot
 }
 
 func ingressToKey(ingress networkingv1.Ingress) string {
