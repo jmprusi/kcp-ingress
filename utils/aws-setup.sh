@@ -73,8 +73,8 @@ KCP_PID=$!
 echo "Waiting 30 seconds..."
 sleep 30
 
-echo "Exporting KUBECONFIG=.kcp/data/admin.kubeconfig"
-export KUBECONFIG=.kcp/data/admin.kubeconfig
+echo "Exporting KUBECONFIG=.kcp/admin.kubeconfig"
+export KUBECONFIG=.kcp/admin.kubeconfig
 
 echo "Registering kind k8s clusters into KCP"
 kubectl apply -f ./tmp/
@@ -83,10 +83,10 @@ echo ""
 echo "The kind k8s clusters have been registered, and KCP is running, now you should run the kcp-ingress"
 echo "example: "
 echo ""
-echo "       ./bin/ingress-controller -kubeconfig .kcp/data/admin.kubeconfig"
+echo "       ./bin/ingress-controller -kubeconfig .kcp/admin.kubeconfig"
 echo ""
 echo "Dont't forget to export the proper KUBECONFIG to create objects against KCP:"
-echo "export KUBECONFIG=${PWD}/.kcp/data/admin.kubeconfig"
+echo "export KUBECONFIG=${PWD}/.kcp/admin.kubeconfig"
 echo ""
 echo "IMPORTANT IMPORTANT IMPORTANT IMPORTANT IMPORTANT IMPORTANT IMPORTANT IMPORTANT "
 echo "DON'T FORGE TO RUN \"make aws-setup-clean\" TO SHUTDOWN THE AWS RESOURCES CREATED"

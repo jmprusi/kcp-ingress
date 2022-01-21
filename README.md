@@ -20,13 +20,13 @@ This script will:
 Once the script is done, open a new terminal, and from the root of the project, you should start the ingress controller:
 
 ```bash
-./bin/ingress-controller -kubeconfig .kcp/data/admin.kubeconfig
+./bin/ingress-controller -kubeconfig .kcp/admin.kubeconfig
 ```
 
 Now you can create a new ingress resource from the root of the project:
 
 ```bash 
-export KUBECONFIG=.kcp/data/admin.kubeconfig
+export KUBECONFIG=.kcp/admin.kubeconfig
 kubectl create namespace default
 kubectl apply -n default -f samples/ingress.yaml
 ```
@@ -38,7 +38,7 @@ kcp-ingress contains a small control-plane for Envoy for local development purpo
 To enable it, run:
 
 ```bash
-./bin/ingress-controller -kubeconfig .kcp/data/admin.kubeconfig -envoyxds
+./bin/ingress-controller -kubeconfig .kcp/admin.kubeconfig -envoyxds
 ```
 
 Then you can run the Envoy server using the bootstrap config provided:
