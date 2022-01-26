@@ -67,8 +67,12 @@ func NewController(config *ControllerConfig) *Controller {
 		DeleteFunc: func(obj interface{}) { c.ingressesFromService(obj) },
 	})
 
-	sif.WaitForCacheSync(stopCh)
 	sif.Start(stopCh)
+	for inf, sync := range sif.WaitForCacheSync(stopCh) {
+		if !sync {
+			klog.Fatalf("Failed to sync %s", inf)
+		}
+	}
 
 	c.indexer = sif.Networking().V1().Ingresses().Informer().GetIndexer()
 	c.lister = sif.Networking().V1().Ingresses().Lister()
