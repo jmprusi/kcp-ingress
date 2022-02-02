@@ -67,7 +67,7 @@ cat ${TEMP_DIR}/cluster2_kubeconfig | sed -e 's/^/    /' | cat utils/kcp-contrib
 
 
 echo "Starting KCP, sending logs to ${KCP_LOG_FILE}"
-${KCP_BIN} start --push_mode --install_cluster_controller --resources_to_sync=ingresses.networking.k8s.io --auto_publish_apis > ${KCP_LOG_FILE} 2>&1 &
+${KCP_BIN} start --push-mode --install-cluster-controller --resources-to-sync=ingresses.networking.k8s.io --auto-publish-apis > ${KCP_LOG_FILE} 2>&1 &
 KCP_PID=$!
 
 echo "Waiting 30 seconds..."
