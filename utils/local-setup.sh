@@ -20,6 +20,8 @@ trap cleanup EXIT 1 2 3 6 15
 
 cleanup() {
   echo "Killing KCP"
+  kill "$CONTROLLER_1"
+  kill "$CONTROLLER_2"
   kill "$KCP_PID"
 }
 
@@ -109,7 +111,7 @@ kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class
 } &>/dev/null
 
 echo "Starting KCP, sending logs to ${KCP_LOG_FILE}"
-${KCP_BIN} start --push-mode --install-cluster-controller --resources_to_sync=deployments --resources-to-sync=services --resources-to-sync=ingresses.networking.k8s.io --auto-publish-apis > ${KCP_LOG_FILE} 2>&1 &
+${KCP_BIN} start --push-mode --install-cluster-controller --resources-to-sync=deployments --resources-to-sync=services --resources-to-sync=ingresses.networking.k8s.io --auto-publish-apis > ${KCP_LOG_FILE} 2>&1 &
 KCP_PID=$!
 
 echo "Waiting 15 seconds..."
@@ -120,6 +122,12 @@ export KUBECONFIG=.kcp/admin.kubeconfig
 
 echo "Registering kind k8s clusters into KCP"
 kubectl apply -f ./tmp/
+
+./bin/cluster-controller --kubeconfig=.kcp/admin.kubeconfig >> ${KCP_LOG_FILE} 2>&1 &
+CONTROLLER_1=$!
+
+./bin/deployment-splitter --kubeconfig=.kcp/admin.kubeconfig >> ${KCP_LOG_FILE} 2>&1 &
+CONTROLLER_2=$!
 
 echo "" 
 echo "The kind k8s clusters have been registered, and KCP is running, now you should run the kcp-ingress"

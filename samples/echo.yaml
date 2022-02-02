@@ -1,7 +1,10 @@
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: echo-deployment
+  labels:
+    kcp.dev/cluster: kcp-cluster-a
 spec:
   replicas: 1
   selector:
@@ -18,11 +21,14 @@ spec:
           ports:
             - name: http-port
               containerPort: 8080
+              protocol: TCP
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: httpecho
+  labels:
+    kcp.dev/cluster: kcp-cluster-a
 spec:
   ports:
     - name: http-port
