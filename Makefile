@@ -36,7 +36,16 @@ KCP = $(shell pwd)/bin/kcp
 kcp:
 	rm -rf ./tmp/kcp
 	git clone --depth=1 https://github.com/kcp-dev/kcp ./tmp/kcp
-	cd ./tmp/kcp && go build -o ../../bin/kcp cmd/kcp/kcp.go
+	cd ./tmp/kcp && make
+	cp ./tmp/kcp/bin/cluster-controller $(shell pwd)/bin
+	cp ./tmp/kcp/bin/compat $(shell pwd)/bin
+	cp ./tmp/kcp/bin/crd-puller $(shell pwd)/bin
+	cp ./tmp/kcp/bin/deployment-splitter $(shell pwd)/bin
+	cp ./tmp/kcp/bin/kcp $(shell pwd)/bin
+	cp ./tmp/kcp/bin/kubectl-kcp $(shell pwd)/bin
+	cp ./tmp/kcp/bin/shard-proxy $(shell pwd)/bin
+	cp ./tmp/kcp/bin/syncer $(shell pwd)/bin
+	cp ./tmp/kcp/bin/virtual-workspaces $(shell pwd)/bin
 	rm -rf ./tmp/kcp
 
 .PHONY: local-setup
