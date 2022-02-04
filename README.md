@@ -28,6 +28,7 @@ Now you can create a new ingress resource from the root of the project:
 ```bash 
 export KUBECONFIG=.kcp/admin.kubeconfig
 kubectl create namespace default
+kubectl apply -n default -f samples/echo.yaml
 kubectl apply -n default -f samples/ingress.yaml
 ```
 
