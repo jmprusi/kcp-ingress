@@ -16,7 +16,7 @@ type DNSRecord struct {
 	// spec is the specification of the desired behavior of the dnsRecord.
 	Spec DNSRecordSpec `json:"spec"`
 	// status is the most recently observed status of the dnsRecord.
-	Status DNSRecordStatus `json:"status"`
+	Status DNSRecordStatus `json:"status,omitempty"`
 }
 
 // DNSRecordSpec contains the details of a DNS record.
