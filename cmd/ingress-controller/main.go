@@ -8,6 +8,7 @@ import (
 
 	envoyserver "knative.dev/net-kourier/pkg/envoy/server"
 
+	"github.com/kuadrant/kcp-ingress/pkg/reconciler/dns"
 	"github.com/kuadrant/kcp-ingress/pkg/reconciler/ingress"
 )
 
@@ -47,5 +48,8 @@ func main() {
 		controllerConfig.EnvoyListenPort = envoyListenPort
 	}
 
-	ingress.NewController(controllerConfig).Start(numThreads)
+	go func() {
+		ingress.NewController(controllerConfig).Start(numThreads)
+	}()
+	dns.NewController(&dns.ControllerConfig{Cfg: r}).Start(numThreads)
 }
