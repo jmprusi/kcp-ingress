@@ -130,9 +130,13 @@ func (c *Controller) handleErr(err error, key string) {
 }
 
 func (c *Controller) process(key string) error {
-	obj, _, err := c.indexer.GetByKey(key)
+	obj, exists, err := c.indexer.GetByKey(key)
 	if err != nil {
 		return err
+	}
+
+	if !exists {
+		klog.Infof("Object with key %q was deleted", key)
 	}
 
 	current := obj.(*v1.DNSRecord)
