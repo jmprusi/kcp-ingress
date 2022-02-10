@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/rs/xid"
+	"k8s.io/apimachinery/pkg/util/json"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -39,8 +40,8 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 		// This is a root Ingress
 		if ingress.Annotations == nil || ingress.Annotations[hostGeneratedAnnotation] == "" {
 			// Let's assign it a global hostname if any
-			generatedHost := fmt.Sprintf("%s.%v", xid.New(), c.domain)
-			patch := fmt.Sprintf(`{"annotations":{%q:%q}}`, hostGeneratedAnnotation, generatedHost)
+			generatedHost := fmt.Sprintf("%s.%s", xid.New(), *c.domain)
+			patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, hostGeneratedAnnotation, generatedHost)
 			if err := c.patchIngress(ctx, ingress, []byte(patch)); err != nil {
 				return err
 			}
@@ -148,7 +149,11 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 				if !errors.IsAlreadyExists(err) {
 					return err
 				}
-				_, err := c.dnsRecordClient.DNSRecords(record.Namespace).Update(ctx, record, metav1.UpdateOptions{})
+				data, err := json.Marshal(record)
+				if err != nil {
+					return err
+				}
+				_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Patch(ctx, record.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
 				if err != nil {
 					return err
 				}
@@ -225,8 +230,8 @@ func getDNSRecord(hostname string, ingress *networkingv1.Ingress) *v1.DNSRecord 
 	// Sets the Ingress as the owner reference
 	record.SetOwnerReferences([]metav1.OwnerReference{
 		{
-			APIVersion:         ingress.APIVersion,
-			Kind:               ingress.Kind,
+			APIVersion:         networkingv1.SchemeGroupVersion.String(),
+			Kind:               "Ingress",
 			Name:               ingress.Name,
 			UID:                ingress.UID,
 			Controller:         pointer.Bool(true),
@@ -275,10 +280,10 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 		if hostname, ok := root.Annotations[hostGeneratedAnnotation]; ok {
 			// Duplicate the existing rules for the global hostname
 			globalRules := make([]networkingv1.IngressRule, len(vd.Spec.Rules))
-			for _, rule := range vd.Spec.Rules {
-				r := *rule.DeepCopy()
+			for i, rule := range vd.Spec.Rules {
+				r := rule.DeepCopy()
 				r.Host = hostname
-				globalRules = append(globalRules, r)
+				globalRules[i] = *r
 			}
 			vd.Spec.Rules = append(vd.Spec.Rules, globalRules...)
 		}
@@ -331,7 +336,7 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 
 func (c *Controller) patchIngress(ctx context.Context, ingress *networkingv1.Ingress, data []byte) error {
 	i, err := c.client.NetworkingV1().Ingresses(ingress.Namespace).
-		Patch(ctx, ingress.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
+		Patch(ctx, ingress.Name, types.MergePatchType, data, metav1.PatchOptions{FieldManager: manager})
 	if err != nil {
 		return err
 	}
