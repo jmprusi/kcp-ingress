@@ -26,7 +26,7 @@ go run k8s.io/code-generator/cmd/lister-gen \
 
 go run k8s.io/code-generator/cmd/informer-gen \
     --versioned-clientset-package=github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned \
-	--listers-package=github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/pkg/client/kuadrant/listers \
+	--listers-package=github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/listers \
 	--input-dirs=github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1 \
 	--go-header-file=scripts/boilerplate.txt \
 	--output-base=. \

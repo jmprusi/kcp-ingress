@@ -9,7 +9,7 @@ import (
 	kuadrantv1 "github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
 	versioned "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned"
 	internalinterfaces "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/informers/externalversions/internalinterfaces"
-	v1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/pkg/client/kuadrant/listers/kuadrant/v1"
+	v1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/listers/kuadrant/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"
