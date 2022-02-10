@@ -5,36 +5,52 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strings"
-	"time"
 
-	"github.com/jmprusi/kcp-ingress/pkg/envoy"
-	v1 "k8s.io/api/core/v1"
+	"github.com/rs/xid"
+
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/api/networking/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog"
+	"k8s.io/utils/pointer"
+
+	v1 "github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
+	"github.com/kuadrant/kcp-ingress/pkg/envoy"
 )
 
 const (
 	clusterLabel = "kcp.dev/cluster"
 	ownedByLabel = "kcp.dev/owned-by"
-	pollInterval = time.Minute
+
+	hostGeneratedAnnotation = "kuadrant.dev/host.generated"
+
+	manager = "kcp-ingress"
 )
 
 func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingress) error {
 	klog.Infof("reconciling Ingress %q", ingress.Name)
 
 	if ingress.Labels == nil || ingress.Labels[clusterLabel] == "" {
-		// This is a root Ingress; get its leafs.
+		// This is a root Ingress
+		if ingress.Annotations == nil || ingress.Annotations[hostGeneratedAnnotation] == "" {
+			// Let's assign it a global hostname if any
+			generatedHost := fmt.Sprintf("%s.%v", xid.New(), c.domain)
+			patch := fmt.Sprintf(`{"annotations":{%q:%q}}`, hostGeneratedAnnotation, generatedHost)
+			if err := c.patchIngress(ctx, ingress, []byte(patch)); err != nil {
+				return err
+			}
+		}
+
+		// Get the current leaves
 		sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, ingress.Name))
 		if err != nil {
 			return err
 		}
-
-		// Get the current Leaves
 		currentLeaves, err := c.lister.List(sel)
 		if err != nil {
 			return err
@@ -46,46 +62,42 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 			return err
 		}
 
-		// Clean the leaves that are not desired anymore
-		for _, leaftoremove := range findNonDesiredLeaves(currentLeaves, desiredLeaves) {
-			klog.Infof("Deleting non desired leaf %q", leaftoremove.Name)
-			if err := c.client.NetworkingV1().Ingresses(leaftoremove.Namespace).Delete(ctx, leaftoremove.Name, metav1.DeleteOptions{}); err != nil {
+		// Delete the leaves that are not desired anymore
+		for _, leftover := range findNonDesiredLeaves(currentLeaves, desiredLeaves) {
+			// The clean-up, i.e., removal of the DNS records, will be done in the next reconciliation cycle
+			klog.Infof("Deleting non desired leaf %q", leftover.Name)
+			if err := c.client.NetworkingV1().Ingresses(leftover.Namespace).Delete(ctx, leftover.Name, metav1.DeleteOptions{}); err != nil {
 				return err
 			}
 		}
 
 		// TODO(jmprusi): ugly. fix. use indexer, etc.
 		// Create and/or update the desired leaves
-		for _, desiredleaf := range desiredLeaves {
-			if _, err := c.client.NetworkingV1().Ingresses(desiredleaf.Namespace).Create(ctx, desiredleaf, metav1.CreateOptions{}); err != nil {
+		for _, leaf := range desiredLeaves {
+			if _, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Create(ctx, leaf, metav1.CreateOptions{}); err != nil {
 				if errors.IsAlreadyExists(err) {
-					existingLeaf, err := c.client.NetworkingV1().Ingresses(desiredleaf.Namespace).Get(ctx, desiredleaf.Name, metav1.GetOptions{})
+					existingLeaf, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Get(ctx, leaf.Name, metav1.GetOptions{})
 					if err != nil {
 						return err
 					}
 
 					// Set the resourceVersion and UID to update the desired leaf.
-					desiredleaf.ResourceVersion = existingLeaf.ResourceVersion
-					desiredleaf.UID = existingLeaf.UID
+					leaf.ResourceVersion = existingLeaf.ResourceVersion
+					leaf.UID = existingLeaf.UID
 
-					if _, err := c.client.NetworkingV1().Ingresses(desiredleaf.Namespace).Update(ctx, desiredleaf, metav1.UpdateOptions{}); err != nil {
+					if _, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Update(ctx, leaf, metav1.UpdateOptions{}); err != nil {
 						return err
 					}
-
 				} else {
 					return err
 				}
 			}
+
 		}
-
 	} else {
-		// If the ingress has the clusterLabel set, that means that it is a leaf and it's synced with
-		// a cluster.
-		//
-		// This update can come from the creation or because the syncer has update the status.
-
+		// If the Ingress has the cluster label set, that means that it's a leaf.
 		rootIngressName := ingress.Labels[ownedByLabel]
-		// A leaf Ingress was updated; get others and aggregate status.
+		// The leaf Ingress was updated, get others and aggregate status.
 		sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, rootIngressName))
 		if err != nil {
 			return err
@@ -111,18 +123,51 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 
 		// TODO(jmprusi): A leaf without rootIngress?
 		if !exists {
-			return fmt.Errorf("Root Ingress not found: %s", rootIngressName)
+			return fmt.Errorf("root Ingress not found: %s", rootIngressName)
 		}
 
 		rootIngress = rootIf.(*networkingv1.Ingress).DeepCopy()
+		rootHostname := ""
+		if rootIngress.Annotations != nil && rootIngress.Annotations[hostGeneratedAnnotation] != "" {
+			rootHostname = rootIngress.Annotations[hostGeneratedAnnotation]
+		}
+
+		// Reconcile the DNSRecord for the Ingress
+		if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
+			// The Ingress is being deleted. KCP doesn't currently cascade deletion to owned resources,
+			// so let's delete the DNSRecord manually.
+			err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+			if err != nil && !errors.IsNotFound(err) {
+				return err
+			}
+		} else if rootHostname != "" && len(ingress.Status.LoadBalancer.Ingress) > 0 {
+			// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
+			record := getDNSRecord(rootHostname, ingress)
+			_, err := c.dnsRecordClient.DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
+			if err != nil {
+				if !errors.IsAlreadyExists(err) {
+					return err
+				}
+				_, err := c.dnsRecordClient.DNSRecords(record.Namespace).Update(ctx, record, metav1.UpdateOptions{})
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+			if err != nil && !errors.IsNotFound(err) {
+				return err
+			}
+		}
 
 		// Clean the current status, and then recreate if from the other leafs.
-		rootIngress.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{}
+		rootIngress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{}
 		for _, o := range others {
+			// Should the root Ingress status be updated only once the DNS record is successfully created / updated?
 			rootIngress.Status.LoadBalancer.Ingress = append(rootIngress.Status.LoadBalancer.Ingress, o.Status.LoadBalancer.Ingress...)
 		}
 
-		// If the envoy controlplane is enabled, we update the cache and generate and send to envoy a new snapshot.
+		// If the envoy control plane is enabled, we update the cache and generate and send to envoy a new snapshot.
 		if c.envoyXDS != nil {
 			c.cache.UpdateIngress(*rootIngress)
 			err = c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
@@ -132,12 +177,12 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 
 			statusHost := generateStatusHost(c.domain, rootIngress)
 			// Now overwrite the Status of the rootIngress with our desired LB
-			rootIngress.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{{
+			rootIngress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{
 				Hostname: statusHost,
 			}}
 		}
 
-		// Update the rootIngress status with our desired LB.
+		// Update the root Ingress status with our desired LB.
 		if _, err := c.client.NetworkingV1().Ingresses(rootIngress.Namespace).UpdateStatus(ctx, rootIngress, metav1.UpdateOptions{}); err != nil {
 			if errors.IsConflict(err) {
 				key, err := cache.MetaNamespaceKeyFunc(ingress)
@@ -153,6 +198,45 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 	return nil
 }
 
+func getDNSRecord(hostname string, ingress *networkingv1.Ingress) *v1.DNSRecord {
+	var targets []string
+	for _, lbs := range ingress.Status.LoadBalancer.Ingress {
+		// TODO: Resolve the hostname IPs as DNS-based load-balancing can only be done using A records
+		targets = append(targets, lbs.IP)
+	}
+
+	record := &v1.DNSRecord{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: v1.SchemeGroupVersion.String(),
+			Kind:       "DNSRecord",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ingress.Namespace,
+			Name:      ingress.Name,
+		},
+		Spec: v1.DNSRecordSpec{
+			DNSName:    hostname,
+			RecordType: "A",
+			Targets:    targets,
+			RecordTTL:  60,
+		},
+	}
+
+	// Sets the Ingress as the owner reference
+	record.SetOwnerReferences([]metav1.OwnerReference{
+		{
+			APIVersion:         ingress.APIVersion,
+			Kind:               ingress.Kind,
+			Name:               ingress.Name,
+			UID:                ingress.UID,
+			Controller:         pointer.Bool(true),
+			BlockOwnerDeletion: pointer.Bool(true),
+		},
+	})
+
+	return record
+}
+
 func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingress) ([]*networkingv1.Ingress, error) {
 	// This will parse the ingresses and extract all the destination services,
 	// then create a new ingress leaf for each of them.
@@ -161,10 +245,10 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 		return nil, err
 	}
 
-	var clusterDests []string
+	var clusters []string
 	for _, service := range services {
 		if service.Labels[clusterLabel] != "" {
-			clusterDests = append(clusterDests, service.Labels[clusterLabel])
+			clusters = append(clusters, service.Labels[clusterLabel])
 		} else {
 			klog.Infof("Skipping service %q because it is not assigned to any cluster", service.Name)
 		}
@@ -173,17 +257,8 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 		c.tracker.add(root, service)
 	}
 
-	if len(clusterDests) == 0 {
-		// No status conditions... let's just leave it blank for now.
-		root.Status.LoadBalancer.Ingress = []v1.LoadBalancerIngress{{
-			IP:       "",
-			Hostname: "",
-		}}
-		return nil, nil
-	}
-
-	desiredLeaves := make([]*networkingv1.Ingress, 0, len(clusterDests))
-	for _, cl := range clusterDests {
+	desiredLeaves := make([]*networkingv1.Ingress, 0, len(clusters))
+	for _, cl := range clusters {
 		vd := root.DeepCopy()
 		// TODO: munge cluster name
 		vd.Name = fmt.Sprintf("%s--%s", root.Name, cl)
@@ -196,6 +271,17 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 		// TODO(jmprusi): Right now the syncer is syncing the OwnerReferences causing the ingresses to be deleted.
 		vd.OwnerReferences = []metav1.OwnerReference{}
 		vd.SetResourceVersion("")
+
+		if hostname, ok := root.Annotations[hostGeneratedAnnotation]; ok {
+			// Duplicate the existing rules for the global hostname
+			globalRules := make([]networkingv1.IngressRule, len(vd.Spec.Rules))
+			for _, rule := range vd.Spec.Rules {
+				r := *rule.DeepCopy()
+				r.Host = hostname
+				globalRules = append(globalRules, r)
+			}
+			vd.Spec.Rules = append(vd.Spec.Rules, globalRules...)
+		}
 
 		desiredLeaves = append(desiredLeaves, vd)
 	}
@@ -210,7 +296,6 @@ func hashString(s string) string {
 }
 
 func generateStatusHost(domain *string, ingress *networkingv1.Ingress) string {
-
 	// TODO(jmprusi): using "contains" is a bad idea as it could be abused by crafting a malicious hostname, but for a PoC it should be good enough?
 	allRulesAreDomain := true
 	for _, rule := range ingress.Spec.Rules {
@@ -220,7 +305,7 @@ func generateStatusHost(domain *string, ingress *networkingv1.Ingress) string {
 		}
 	}
 
-	//TODO(jmprusi): Hardcoded to the first one...
+	// TODO(jmprusi): Hardcoded to the first one...
 	if allRulesAreDomain {
 		return ingress.Spec.Rules[0].Host
 	}
@@ -229,8 +314,8 @@ func generateStatusHost(domain *string, ingress *networkingv1.Ingress) string {
 }
 
 // getServices will parse the ingress object and return a list of the services.
-func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingress) ([]*v1.Service, error) {
-	var services []*v1.Service
+func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingress) ([]*corev1.Service, error) {
+	var services []*corev1.Service
 	for _, rule := range ingress.Spec.Rules {
 		for _, path := range rule.HTTP.Paths {
 			svc, err := c.client.CoreV1().Services(ingress.Namespace).Get(ctx, path.Backend.Service.Name, metav1.GetOptions{})
@@ -242,6 +327,16 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 		}
 	}
 	return services, nil
+}
+
+func (c *Controller) patchIngress(ctx context.Context, ingress *networkingv1.Ingress, data []byte) error {
+	i, err := c.client.NetworkingV1().Ingresses(ingress.Namespace).
+		Patch(ctx, ingress.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
+	if err != nil {
+		return err
+	}
+	ingress = i
+	return nil
 }
 
 func findNonDesiredLeaves(current, desired []*networkingv1.Ingress) []*networkingv1.Ingress {

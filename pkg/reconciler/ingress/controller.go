@@ -4,8 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/jmprusi/kcp-ingress/pkg/envoy"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,7 +17,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
+
 	envoyserver "knative.dev/net-kourier/pkg/envoy/server"
+
+	kuadrantv1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned/typed/kuadrant/v1"
+	"github.com/kuadrant/kcp-ingress/pkg/envoy"
 )
 
 const resyncPeriod = 10 * time.Hour
@@ -27,17 +30,18 @@ const resyncPeriod = 10 * time.Hour
 // into N virtual Ingresses labeled for each Cluster that exists at the time
 // the Ingress is created.
 func NewController(config *ControllerConfig) *Controller {
-
 	client := kubernetes.NewForConfigOrDie(config.Cfg)
+	dnsRecordClient := kuadrantv1.NewForConfigOrDie(config.Cfg)
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	stopCh := make(chan struct{}) // TODO: hook this up to SIGTERM/SIGINT
 
 	c := &Controller{
-		queue:   queue,
-		client:  client,
-		stopCh:  stopCh,
-		domain:  config.Domain,
-		tracker: *NewTracker(),
+		queue:           queue,
+		client:          client,
+		dnsRecordClient: dnsRecordClient,
+		stopCh:          stopCh,
+		domain:          config.Domain,
+		tracker:         *NewTracker(),
 	}
 
 	if config.EnvoyXDS != nil {
@@ -90,6 +94,7 @@ type ControllerConfig struct {
 type Controller struct {
 	queue           workqueue.RateLimitingInterface
 	client          kubernetes.Interface
+	dnsRecordClient kuadrantv1.KuadrantV1Interface
 	stopCh          chan struct{}
 	indexer         cache.Indexer
 	lister          networkingv1lister.IngressLister
@@ -201,14 +206,14 @@ func (c *Controller) process(key string) error {
 // ingressesFromService enqueues all the related ingresses for a given service.
 func (c *Controller) ingressesFromService(obj interface{}) {
 	// Does that Service has any Ingress associated to?
-	ingresses, ok := c.tracker.getIngress(obj.(*v1.Service))
+	ingresses, ok := c.tracker.getIngress(obj.(*corev1.Service))
 	if ok {
 		// One Service can be referenced by 0..n Ingresses, so we need to enqueue all the related ingreses.
 		for _, ingress := range ingresses {
-			klog.Infof("tracked service %q triggered Ingress %q reconciliation", obj.(*v1.Service).Name, ingress.Name)
+			klog.Infof("tracked service %q triggered Ingress %q reconciliation", obj.(*corev1.Service).Name, ingress.Name)
 			c.enqueue(ingress.DeepCopy())
 		}
 	} else {
-		klog.Info("Ignoring non-tracked service: ", obj.(*v1.Service).Name)
+		klog.Info("Ignoring non-tracked service: ", obj.(*corev1.Service).Name)
 	}
 }

@@ -1,27 +1,21 @@
-module github.com/jmprusi/kcp-ingress
+module github.com/kuadrant/kcp-ingress
 
 go 1.16
 
 require (
-	github.com/dgryski/go-gk v0.0.0-20200319235926-a69029f61654 // indirect
 	github.com/envoyproxy/go-control-plane v0.10.1
 	github.com/envoyproxy/protoc-gen-validate v0.6.1 // indirect
 	github.com/go-logr/logr v1.1.0 // indirect
-	github.com/go-openapi/spec v0.19.6 // indirect
-	github.com/go-openapi/swag v0.19.15 // indirect
 	github.com/google/uuid v1.3.0
 	github.com/imdario/mergo v0.3.9 // indirect
-	github.com/influxdata/tdigest v0.0.0-20181121200506-bf2b5ad3c0a9 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
-	github.com/kcp-dev/kcp v0.0.0-20210923183051-cc3c77a10a2e // indirect
-	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible
-	golang.org/x/text v0.3.7 // indirect
+	github.com/rs/xid v1.3.0
 	google.golang.org/protobuf v1.27.1
 	k8s.io/api v0.22.2
 	k8s.io/apimachinery v0.22.2
 	k8s.io/client-go v0.21.4
+	k8s.io/code-generator v0.21.4 // indirect
 	k8s.io/klog v1.0.0
 	k8s.io/klog/v2 v2.20.0 // indirect
 	knative.dev/net-kourier v0.28.0
