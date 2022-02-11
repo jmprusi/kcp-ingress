@@ -32,6 +32,19 @@ kubectl apply -n default -f samples/echo.yaml
 kubectl apply -n default -f samples/ingress.yaml
 ```
 
+If errors are encountered about resources not existing, sometimes deleting the clusters from KCP and recreating them can solve the problem:
+
+Delete the clusters:
+```bash 
+KUBECONFIG=.kcp/admin.kubeconfig kubectl delete cluster kcp-cluster-a
+KUBECONFIG=.kcp/admin.kubeconfig kubectl delete cluster kcp-cluster-b
+```
+Recreate them:
+```bash
+KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-a.yaml
+KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-b.yaml
+```
+
 ## Envoy control plane
 
 kcp-ingress contains a small control-plane for Envoy for local development purposes. It reads Ingress V1 resources and creates the Envoy configuration. It is not intended to be used in production, and doesn't cover all the features of Ingress v1.

@@ -111,11 +111,18 @@ kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class
 } &>/dev/null
 
 echo "Starting KCP, sending logs to ${KCP_LOG_FILE}"
-${KCP_BIN} start --push-mode  --run-controllers --resources-to-sync=deployments --resources-to-sync=services --resources-to-sync=ingresses.networking.k8s.io --auto-publish-apis > ${KCP_LOG_FILE} 2>&1 &
+${KCP_BIN} start --push-mode --run-controllers --resources-to-sync=deployments --resources-to-sync=services --resources-to-sync=ingresses.networking.k8s.io --auto-publish-apis > ${KCP_LOG_FILE} 2>&1 &
 KCP_PID=$!
 
 echo "Waiting 15 seconds..."
 sleep 15
+
+if ! ps -p ${KCP_PID}; then
+  echo "####"
+  echo "---> KCP failed to start, see ${KCP_LOG_FILE} for info."
+  echo "####"
+  exit 1 #this will trigger cleanup function
+fi
 
 echo "Exporting KUBECONFIG=.kcp/admin.kubeconfig"
 export KUBECONFIG=.kcp/admin.kubeconfig
