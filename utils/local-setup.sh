@@ -123,6 +123,9 @@ export KUBECONFIG=.kcp/admin.kubeconfig
 echo "Registering kind k8s clusters into KCP"
 kubectl apply -f ./tmp/
 
+echo "Registering HCG APIs"
+kubectl apply -f ./config/crd
+
 ./bin/cluster-controller --kubeconfig=.kcp/admin.kubeconfig >> ${KCP_LOG_FILE} 2>&1 &
 CONTROLLER_1=$!
 

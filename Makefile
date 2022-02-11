@@ -69,3 +69,29 @@ clean:
 	-rm -rf ./.kcp
 	-rm -f ./bin/*
 	-rm -rf ./tmp
+
+generate: generate-deepcopy generate-crd generate-client
+
+generate-deepcopy: controller-gen
+	cd pkg/apis/kuadrant && $(CONTROLLER_GEN) paths="./..." object
+
+generate-crd: controller-gen
+	cd pkg/apis/kuadrant && $(CONTROLLER_GEN) crd paths=./... output:crd:artifacts:config=../../../config/crd output:crd:dir=../../../config/crd crd:crdVersions=v1 && rm -rf ./config
+
+generate-client:
+	./scripts/gen_client.sh
+
+controller-gen:
+ifeq (, $(shell which controller-gen))
+	@{ \
+	set -e ;\
+	CONTROLLER_GEN_TMP_DIR=$$(mktemp -d) ;\
+	cd $$CONTROLLER_GEN_TMP_DIR ;\
+	go mod init tmp ;\
+	go get sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION) ;\
+	rm -rf $$CONTROLLER_GEN_TMP_DIR ;\
+	}
+CONTROLLER_GEN=$(GOBIN)/controller-gen
+else
+CONTROLLER_GEN=$(shell which controller-gen)
+endif
