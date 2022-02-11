@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"strings"
 
 	"github.com/rs/xid"
@@ -143,8 +144,11 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 			}
 		} else if rootHostname != "" && len(ingress.Status.LoadBalancer.Ingress) > 0 {
 			// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
-			record := getDNSRecord(rootHostname, ingress)
-			_, err := c.dnsRecordClient.DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
+			record, err := getDNSRecord(rootHostname, ingress)
+			if err != nil {
+				return err
+			}
+			_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
 			if err != nil {
 				if !errors.IsAlreadyExists(err) {
 					return err
@@ -203,11 +207,23 @@ func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingres
 	return nil
 }
 
-func getDNSRecord(hostname string, ingress *networkingv1.Ingress) *v1.DNSRecord {
+//TODO may want to move this to its own package in the future
+func getDNSRecord(hostname string, ingress *networkingv1.Ingress) (*v1.DNSRecord, error) {
 	var targets []string
 	for _, lbs := range ingress.Status.LoadBalancer.Ingress {
-		// TODO: Resolve the hostname IPs as DNS-based load-balancing can only be done using A records
-		targets = append(targets, lbs.IP)
+		if lbs.Hostname != "" {
+			//TODO once we are adding tests abstract to interface
+			ips, err := net.LookupIP(lbs.Hostname)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips {
+				targets = append(targets, ip.String())
+			}
+		}
+		if lbs.IP != "" {
+			targets = append(targets, lbs.IP)
+		}
 	}
 
 	record := &v1.DNSRecord{
@@ -239,7 +255,7 @@ func getDNSRecord(hostname string, ingress *networkingv1.Ingress) *v1.DNSRecord 
 		},
 	})
 
-	return record
+	return record, nil
 }
 
 func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingress) ([]*networkingv1.Ingress, error) {
