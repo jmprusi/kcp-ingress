@@ -1,0 +1,11 @@
+apiVersion: kuadrant.dev/v1
+kind: DNSRecord
+metadata:
+  name: c833s3fblarnfjtervr0.hcpapps.net
+spec:
+  dnsName: c833s3fblarnfjtervr0.hcpapps.net
+  recordTTL: 60
+  recordType: A
+  targets:
+    - 52.215.108.61
+    - 52.30.101.221

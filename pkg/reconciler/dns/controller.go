@@ -2,6 +2,8 @@ package dns
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -17,12 +19,14 @@ import (
 	kuadrantv1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned"
 	"github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/informers/externalversions"
 	kuadrantv1lister "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/listers/kuadrant/v1"
+	"github.com/kuadrant/kcp-ingress/pkg/dns"
+	awsdns "github.com/kuadrant/kcp-ingress/pkg/dns/aws"
 )
 
 const resyncPeriod = 10 * time.Hour
 
 // NewController returns a new Controller which reconciles DNSRecord.
-func NewController(config *ControllerConfig) *Controller {
+func NewController(config *ControllerConfig) (*Controller, error) {
 	client := kuadrantv1.NewForConfigOrDie(config.Cfg)
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	stopCh := make(chan struct{}) // TODO: hook this up to SIGTERM/SIGINT
@@ -32,6 +36,25 @@ func NewController(config *ControllerConfig) *Controller {
 		client: client,
 		stopCh: stopCh,
 	}
+
+	dnsProvider, err := newAWSDNSProvider()
+	if err != nil {
+		return nil, err
+	}
+	c.dnsProvider = dnsProvider
+
+	var dnsZones []v1.DNSZone
+	zoneID, zoneIDSet := os.LookupEnv("AWS_DNS_PUBLIC_ZONE_ID")
+	if zoneIDSet {
+		dnsZone := &v1.DNSZone{
+			ID: zoneID,
+		}
+		dnsZones = append(dnsZones, *dnsZone)
+		klog.Infof("Using aws dns zone id : %s", zoneID)
+	} else {
+		klog.Warningf("No aws dns zone id set(AWS_DNS_PUBLIC_ZONE_ID). No DNS records will be created!!")
+	}
+	c.dnsZones = dnsZones
 
 	sif := externalversions.NewSharedInformerFactoryWithOptions(c.client, resyncPeriod)
 
@@ -52,7 +75,7 @@ func NewController(config *ControllerConfig) *Controller {
 	c.indexer = sif.Kuadrant().V1().DNSRecords().Informer().GetIndexer()
 	c.lister = sif.Kuadrant().V1().DNSRecords().Lister()
 
-	return c
+	return c, nil
 }
 
 type ControllerConfig struct {
@@ -60,11 +83,13 @@ type ControllerConfig struct {
 }
 
 type Controller struct {
-	queue   workqueue.RateLimitingInterface
-	client  kuadrantv1.Interface
-	stopCh  chan struct{}
-	indexer cache.Indexer
-	lister  kuadrantv1lister.DNSRecordLister
+	queue       workqueue.RateLimitingInterface
+	client      kuadrantv1.Interface
+	stopCh      chan struct{}
+	indexer     cache.Indexer
+	lister      kuadrantv1lister.DNSRecordLister
+	dnsProvider dns.Provider
+	dnsZones    []v1.DNSZone
 }
 
 func (c *Controller) enqueue(obj interface{}) {
@@ -81,9 +106,9 @@ func (c *Controller) Start(numThreads int) {
 	for i := 0; i < numThreads; i++ {
 		go wait.Until(c.startWorker, time.Second, c.stopCh)
 	}
-	klog.Infof("Starting workers")
+	klog.Infof("Starting dns workers")
 	<-c.stopCh
-	klog.Infof("Stopping workers")
+	klog.Infof("Stopping dns workers")
 }
 
 func (c *Controller) startWorker() {
@@ -151,9 +176,24 @@ func (c *Controller) process(key string) error {
 
 	// If the object being reconciled changed as a result, update it.
 	if !equality.Semantic.DeepEqual(previous, current) {
-		_, uerr := c.client.KuadrantV1().DNSRecords(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
+		_, uerr := c.client.KuadrantV1().DNSRecords(current.Namespace).UpdateStatus(ctx, current, metav1.UpdateOptions{})
+		if uerr != nil {
+			return uerr
+		}
+		_, uerr = c.client.KuadrantV1().DNSRecords(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
 		return uerr
 	}
 
 	return err
+}
+
+func newAWSDNSProvider() (dns.Provider, error) {
+	var dnsProvider dns.Provider
+	provider, err := awsdns.NewProvider(awsdns.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AWS DNS manager: %v", err)
+	}
+	dnsProvider = provider
+
+	return dnsProvider, nil
 }

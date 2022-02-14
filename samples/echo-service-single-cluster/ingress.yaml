@@ -4,7 +4,7 @@ metadata:
   name: ingress-domain
 spec:
   rules:
-    - host: my-hostname.kcp-apps.127.0.0.1.nip.io
+    - host: my-hostname.hcpapps.net
       http:
         paths:
           - path: /
