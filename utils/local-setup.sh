@@ -20,7 +20,6 @@ trap cleanup EXIT 1 2 3 6 15
 
 cleanup() {
   echo "Killing KCP"
-  kill "$CONTROLLER_1"
   kill "$CONTROLLER_2"
   kill "$KCP_PID"
 }
@@ -102,16 +101,16 @@ kubectl config use-context kind-${KIND_CLUSTER_A}
 
 VERSION=$(curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/master/stable.txt)
 curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
-kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true" 
+kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true"
 
 kubectl config use-context kind-${KIND_CLUSTER_B}
 curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
-kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true" 
+kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true"
 
 } &>/dev/null
 
 echo "Starting KCP, sending logs to ${KCP_LOG_FILE}"
-${KCP_BIN} start --push-mode  --run-controllers --resources-to-sync=deployments --resources-to-sync=services --resources-to-sync=ingresses.networking.k8s.io --auto-publish-apis > ${KCP_LOG_FILE} 2>&1 &
+${KCP_BIN} start --push-mode --run-controllers --resources-to-sync=deployments --resources-to-sync=services --resources-to-sync=ingresses.networking.k8s.io --auto-publish-apis > ${KCP_LOG_FILE} 2>&1 &
 KCP_PID=$!
 
 echo "Waiting 15 seconds..."
@@ -126,13 +125,10 @@ kubectl apply -f ./tmp/
 echo "Registering HCG APIs"
 kubectl apply -f ./config/crd
 
-./bin/cluster-controller --kubeconfig=.kcp/admin.kubeconfig >> ${KCP_LOG_FILE} 2>&1 &
-CONTROLLER_1=$!
-
 ./bin/deployment-splitter --kubeconfig=.kcp/admin.kubeconfig >> ${KCP_LOG_FILE} 2>&1 &
 CONTROLLER_2=$!
 
-echo "" 
+echo ""
 echo "The kind k8s clusters have been registered, and KCP is running, now you should run the kcp-ingress"
 echo "example: "
 echo ""
