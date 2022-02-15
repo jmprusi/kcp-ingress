@@ -190,7 +190,14 @@ func (c *Controller) process(key string) error {
 	previous := current.DeepCopy()
 
 	ctx := context.TODO()
-	if err := c.reconcile(ctx, current); err != nil {
+
+	rootName, isLeaf := getRootName(current)
+	if isLeaf {
+		err = c.reconcileLeaf(ctx, rootName, current)
+	} else {
+		err = c.reconcileRoot(ctx, current)
+	}
+	if err != nil {
 		return err
 	}
 

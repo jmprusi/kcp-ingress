@@ -34,176 +34,174 @@ const (
 	manager = "kcp-ingress"
 )
 
-func (c *Controller) reconcile(ctx context.Context, ingress *networkingv1.Ingress) error {
-	klog.Infof("reconciling Ingress %q", ingress.Name)
-
-	if ingress.Labels == nil || ingress.Labels[clusterLabel] == "" {
-		// This is a root Ingress
-		if ingress.Annotations == nil || ingress.Annotations[hostGeneratedAnnotation] == "" {
-			// Let's assign it a global hostname if any
-			generatedHost := fmt.Sprintf("%s.%s", xid.New(), *c.domain)
-			patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, hostGeneratedAnnotation, generatedHost)
-			if err := c.patchIngress(ctx, ingress, []byte(patch)); err != nil {
-				return err
-			}
-		}
-
-		// Get the current leaves
-		sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, ingress.Name))
-		if err != nil {
-			return err
-		}
-		currentLeaves, err := c.lister.List(sel)
-		if err != nil {
-			return err
-		}
-
-		// Generate the desired leaves
-		desiredLeaves, err := c.desiredLeaves(ctx, ingress)
-		if err != nil {
-			return err
-		}
-
-		// Delete the leaves that are not desired anymore
-		for _, leftover := range findNonDesiredLeaves(currentLeaves, desiredLeaves) {
-			// The clean-up, i.e., removal of the DNS records, will be done in the next reconciliation cycle
-			klog.Infof("Deleting non desired leaf %q", leftover.Name)
-			if err := c.client.NetworkingV1().Ingresses(leftover.Namespace).Delete(ctx, leftover.Name, metav1.DeleteOptions{}); err != nil {
-				return err
-			}
-		}
-
-		// TODO(jmprusi): ugly. fix. use indexer, etc.
-		// Create and/or update the desired leaves
-		for _, leaf := range desiredLeaves {
-			if _, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Create(ctx, leaf, metav1.CreateOptions{}); err != nil {
-				if errors.IsAlreadyExists(err) {
-					existingLeaf, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Get(ctx, leaf.Name, metav1.GetOptions{})
-					if err != nil {
-						return err
-					}
-
-					// Set the resourceVersion and UID to update the desired leaf.
-					leaf.ResourceVersion = existingLeaf.ResourceVersion
-					leaf.UID = existingLeaf.UID
-
-					if _, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Update(ctx, leaf, metav1.UpdateOptions{}); err != nil {
-						return err
-					}
-				} else {
-					return err
-				}
-			}
-
-		}
-	} else {
-		// If the Ingress has the cluster label set, that means that it's a leaf.
-		rootIngressName := ingress.Labels[ownedByLabel]
-		// The leaf Ingress was updated, get others and aggregate status.
-		sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, rootIngressName))
-		if err != nil {
-			return err
-		}
-		others, err := c.lister.List(sel)
-		if err != nil {
-			return err
-		}
-
-		// Get the rootIngress based on the labels.
-		var rootIngress *networkingv1.Ingress
-
-		rootIf, exists, err := c.indexer.Get(&v1beta1.Ingress{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace:   ingress.Namespace,
-				Name:        rootIngressName,
-				ClusterName: ingress.GetClusterName(),
-			},
-		})
-		if err != nil {
-			return err
-		}
-
-		// TODO(jmprusi): A leaf without rootIngress?
-		if !exists {
-			return fmt.Errorf("root Ingress not found: %s", rootIngressName)
-		}
-
-		rootIngress = rootIf.(*networkingv1.Ingress).DeepCopy()
-		rootHostname := ""
-		if rootIngress.Annotations != nil && rootIngress.Annotations[hostGeneratedAnnotation] != "" {
-			rootHostname = rootIngress.Annotations[hostGeneratedAnnotation]
-		}
-
-		// Reconcile the DNSRecord for the Ingress
-		if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
-			// The Ingress is being deleted. KCP doesn't currently cascade deletion to owned resources,
-			// so let's delete the DNSRecord manually.
-			err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
-			if err != nil && !errors.IsNotFound(err) {
-				return err
-			}
-		} else if rootHostname != "" && len(ingress.Status.LoadBalancer.Ingress) > 0 {
-			// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
-			record, err := getDNSRecord(rootHostname, ingress)
-			if err != nil {
-				return err
-			}
-			_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
-			if err != nil {
-				if !errors.IsAlreadyExists(err) {
-					return err
-				}
-				data, err := json.Marshal(record)
-				if err != nil {
-					return err
-				}
-				_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Patch(ctx, record.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
-				if err != nil {
-					return err
-				}
-			}
-		} else {
-			err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
-			if err != nil && !errors.IsNotFound(err) {
-				return err
-			}
-		}
-
-		// Clean the current status, and then recreate if from the other leafs.
-		rootIngress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{}
-		for _, o := range others {
-			// Should the root Ingress status be updated only once the DNS record is successfully created / updated?
-			rootIngress.Status.LoadBalancer.Ingress = append(rootIngress.Status.LoadBalancer.Ingress, o.Status.LoadBalancer.Ingress...)
-		}
-
-		// If the envoy control plane is enabled, we update the cache and generate and send to envoy a new snapshot.
-		if c.envoyXDS != nil {
-			c.cache.UpdateIngress(*rootIngress)
-			err = c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
-			if err != nil {
-				return err
-			}
-
-			statusHost := generateStatusHost(c.domain, rootIngress)
-			// Now overwrite the Status of the rootIngress with our desired LB
-			rootIngress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{
-				Hostname: statusHost,
-			}}
-		}
-
-		// Update the root Ingress status with our desired LB.
-		if _, err := c.client.NetworkingV1().Ingresses(rootIngress.Namespace).UpdateStatus(ctx, rootIngress, metav1.UpdateOptions{}); err != nil {
-			if errors.IsConflict(err) {
-				key, err := cache.MetaNamespaceKeyFunc(ingress)
-				if err != nil {
-					return err
-				}
-				c.queue.AddRateLimited(key)
-				return nil
-			}
+func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.Ingress) error {
+	if ingress.Annotations == nil || ingress.Annotations[hostGeneratedAnnotation] == "" {
+		// Let's assign it a global hostname if any
+		generatedHost := fmt.Sprintf("%s.%s", xid.New(), *c.domain)
+		patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, hostGeneratedAnnotation, generatedHost)
+		if err := c.patchIngress(ctx, ingress, []byte(patch)); err != nil {
 			return err
 		}
 	}
+
+	// Get the current leaves
+	sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, ingress.Name))
+	if err != nil {
+		return err
+	}
+	currentLeaves, err := c.lister.List(sel)
+	if err != nil {
+		return err
+	}
+
+	// Generate the desired leaves
+	desiredLeaves, err := c.desiredLeaves(ctx, ingress)
+	if err != nil {
+		return err
+	}
+
+	// Delete the leaves that are not desired anymore
+	for _, leftover := range findNonDesiredLeaves(currentLeaves, desiredLeaves) {
+		// The clean-up, i.e., removal of the DNS records, will be done in the next reconciliation cycle
+		klog.Infof("Deleting non desired leaf %q", leftover.Name)
+		if err := c.client.NetworkingV1().Ingresses(leftover.Namespace).Delete(ctx, leftover.Name, metav1.DeleteOptions{}); err != nil {
+			return err
+		}
+	}
+
+	// TODO(jmprusi): ugly. fix. use indexer, etc.
+	// Create and/or update the desired leaves
+	for _, leaf := range desiredLeaves {
+		if _, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Create(ctx, leaf, metav1.CreateOptions{}); err != nil {
+			if errors.IsAlreadyExists(err) {
+				existingLeaf, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Get(ctx, leaf.Name, metav1.GetOptions{})
+				if err != nil {
+					return err
+				}
+
+				// Set the resourceVersion and UID to update the desired leaf.
+				leaf.ResourceVersion = existingLeaf.ResourceVersion
+				leaf.UID = existingLeaf.UID
+
+				if _, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Update(ctx, leaf, metav1.UpdateOptions{}); err != nil {
+					return err
+				}
+			} else {
+				return err
+			}
+		}
+
+	}
+
+	return nil
+}
+
+func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress *networkingv1.Ingress) error {
+	// The leaf Ingress was updated, get others and aggregate status.
+	sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, rootName))
+	if err != nil {
+		return err
+	}
+	others, err := c.lister.List(sel)
+	if err != nil {
+		return err
+	}
+
+	// Get the rootIngress based on the labels.
+	var rootIngress *networkingv1.Ingress
+
+	rootIf, exists, err := c.indexer.Get(&v1beta1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   ingress.Namespace,
+			Name:        rootName,
+			ClusterName: ingress.GetClusterName(),
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// TODO(jmprusi): A leaf without rootIngress?
+	if !exists {
+		return fmt.Errorf("root Ingress not found: %s", rootName)
+	}
+
+	rootIngress = rootIf.(*networkingv1.Ingress).DeepCopy()
+	rootHostname := ""
+	if rootIngress.Annotations != nil && rootIngress.Annotations[hostGeneratedAnnotation] != "" {
+		rootHostname = rootIngress.Annotations[hostGeneratedAnnotation]
+	}
+
+	// Reconcile the DNSRecord for the Ingress
+	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
+		// The Ingress is being deleted. KCP doesn't currently cascade deletion to owned resources,
+		// so let's delete the DNSRecord manually.
+		err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+		if err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+	} else if rootHostname != "" && len(ingress.Status.LoadBalancer.Ingress) > 0 {
+		// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
+		record, err := getDNSRecord(rootHostname, ingress)
+		if err != nil {
+			return err
+		}
+		_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
+		if err != nil {
+			if !errors.IsAlreadyExists(err) {
+				return err
+			}
+			data, err := json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Patch(ctx, record.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+		if err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+	}
+
+	// Clean the current status, and then recreate if from the other leafs.
+	rootIngress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{}
+	for _, o := range others {
+		// Should the root Ingress status be updated only once the DNS record is successfully created / updated?
+		rootIngress.Status.LoadBalancer.Ingress = append(rootIngress.Status.LoadBalancer.Ingress, o.Status.LoadBalancer.Ingress...)
+	}
+
+	// If the envoy control plane is enabled, we update the cache and generate and send to envoy a new snapshot.
+	if c.envoyXDS != nil {
+		c.cache.UpdateIngress(*rootIngress)
+		err = c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
+		if err != nil {
+			return err
+		}
+
+		statusHost := generateStatusHost(c.domain, rootIngress)
+		// Now overwrite the Status of the rootIngress with our desired LB
+		rootIngress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{
+			Hostname: statusHost,
+		}}
+	}
+
+	// Update the root Ingress status with our desired LB.
+	if _, err := c.client.NetworkingV1().Ingresses(rootIngress.Namespace).UpdateStatus(ctx, rootIngress, metav1.UpdateOptions{}); err != nil {
+		if errors.IsConflict(err) {
+			key, err := cache.MetaNamespaceKeyFunc(ingress)
+			if err != nil {
+				return err
+			}
+			c.queue.AddRateLimited(key)
+			return nil
+		}
+		return err
+	}
+
 	return nil
 }
 
@@ -376,4 +374,12 @@ func findNonDesiredLeaves(current, desired []*networkingv1.Ingress) []*networkin
 	}
 
 	return missing
+}
+
+func getRootName(ingress *networkingv1.Ingress) (rootName string, isLeaf bool) {
+	if ingress.Labels != nil {
+		rootName, isLeaf = ingress.Labels[ownedByLabel]
+	}
+
+	return
 }
