@@ -15,10 +15,9 @@ require (
 	k8s.io/api v0.22.2
 	k8s.io/apimachinery v0.22.2
 	k8s.io/client-go v0.21.4
-	k8s.io/code-generator v0.21.4 // indirect
 	k8s.io/klog v1.0.0
 	k8s.io/klog/v2 v2.20.0 // indirect
-	k8s.io/utils v0.0.0-20210707171843-4b05e18ac7d9 // indirect
+	k8s.io/utils v0.0.0-20210707171843-4b05e18ac7d9
 	knative.dev/net-kourier v0.28.0
 )
 
