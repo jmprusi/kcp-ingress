@@ -36,7 +36,7 @@ const (
 )
 
 func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.Ingress) error {
-	//is deleting
+	// is deleting
 	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
 		klog.Infof("deleting root ingress '%v'", ingress.Name)
 		sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, ingress.Name))
@@ -51,8 +51,12 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 				return err
 			}
 		}
-
-		//all leaves removed, remove finalizer
+		// delete DNSRecord
+		err = c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+		if err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+		// all leaves removed, remove finalizer
 		klog.Infof("'%v' ingress leaves cleaned up - removing finalizer", ingress.Name)
 		removeFinalizer(ingress, cascadeCleanupFinalizer)
 
@@ -115,7 +119,34 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 				return err
 			}
 		}
+	}
 
+	// Reconcile the DNSRecord for the root Ingress
+	if len(ingress.Status.LoadBalancer.Ingress) > 0 {
+		// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
+		record, err := getDNSRecord(ingress.Annotations[hostGeneratedAnnotation], ingress)
+		if err != nil {
+			return err
+		}
+		_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
+		if err != nil {
+			if !errors.IsAlreadyExists(err) {
+				return err
+			}
+			data, err := json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Patch(ctx, record.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+		if err != nil && !errors.IsNotFound(err) {
+			return err
+		}
 	}
 
 	return nil
@@ -151,49 +182,13 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 		return c.client.NetworkingV1().Ingresses(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
 	}
 
-	rootIngress = rootIf.(*networkingv1.Ingress).DeepCopy()
-	rootHostname := ""
-	if rootIngress.Annotations != nil && rootIngress.Annotations[hostGeneratedAnnotation] != "" {
-		rootHostname = rootIngress.Annotations[hostGeneratedAnnotation]
-	}
-
-	// Reconcile the DNSRecord for the Ingress
 	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
-		// The Ingress is being deleted. KCP doesn't currently cascade deletion to owned resources,
-		// so let's delete the DNSRecord manually.
-		err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
-		if err != nil && !errors.IsNotFound(err) {
-			return err
-		}
+		// The Ingress is being deleted. KCP doesn't currently cascade deletion to owned resources
 		removeFinalizer(ingress, cascadeCleanupFinalizer)
-	} else if rootHostname != "" && len(ingress.Status.LoadBalancer.Ingress) > 0 {
-		// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
-		record, err := getDNSRecord(rootHostname, ingress)
-		if err != nil {
-			return err
-		}
-		_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
-		if err != nil {
-			if !errors.IsAlreadyExists(err) {
-				return err
-			}
-			data, err := json.Marshal(record)
-			if err != nil {
-				return err
-			}
-			_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Patch(ctx, record.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
-			if err != nil {
-				return err
-			}
-		}
-	} else {
-		err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
-		if err != nil && !errors.IsNotFound(err) {
-			return err
-		}
 	}
 
 	// Clean the current status, and then recreate if from the other leafs.
+	rootIngress = rootIf.(*networkingv1.Ingress).DeepCopy()
 	rootIngress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{}
 	for _, o := range others {
 		// Should the root Ingress status be updated only once the DNS record is successfully created / updated?
@@ -231,12 +226,12 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 	return nil
 }
 
-//TODO may want to move this to its own package in the future
+// TODO may want to move this to its own package in the future
 func getDNSRecord(hostname string, ingress *networkingv1.Ingress) (*v1.DNSRecord, error) {
 	var targets []string
 	for _, lbs := range ingress.Status.LoadBalancer.Ingress {
 		if lbs.Hostname != "" {
-			//TODO once we are adding tests abstract to interface
+			// TODO: once we are adding tests abstract to interface
 			ips, err := net.LookupIP(lbs.Hostname)
 			if err != nil {
 				return nil, err
@@ -427,5 +422,4 @@ func removeFinalizer(ingress *networkingv1.Ingress, finalizer string) {
 			return
 		}
 	}
-
 }
