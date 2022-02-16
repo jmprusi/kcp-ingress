@@ -137,6 +137,7 @@ func (c *Controller) process(key string) error {
 
 	if !exists {
 		klog.Infof("Object with key %q was deleted", key)
+		return nil
 	}
 
 	current := obj.(*v1.DNSRecord)

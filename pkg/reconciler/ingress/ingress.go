@@ -31,10 +31,35 @@ const (
 
 	hostGeneratedAnnotation = "kuadrant.dev/host.generated"
 
-	manager = "kcp-ingress"
+	manager                 = "kcp-ingress"
+	cascadeCleanupFinalizer = "kcp.dev/cascade-cleanup"
 )
 
 func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.Ingress) error {
+	//is deleting
+	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
+		klog.Infof("deleting root ingress '%v'", ingress.Name)
+		sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, ingress.Name))
+		if err != nil {
+			return err
+		}
+		currentLeaves, err := c.lister.List(sel)
+		klog.Infof("found %v leaf ingresses", len(currentLeaves))
+		for _, leaf := range currentLeaves {
+			err = c.client.NetworkingV1().Ingresses(leaf.Namespace).Delete(ctx, leaf.Name, metav1.DeleteOptions{})
+			if err != nil {
+				return err
+			}
+		}
+
+		//all leaves removed, remove finalizer
+		klog.Infof("'%v' ingress leaves cleaned up - removing finalizer", ingress.Name)
+		removeFinalizer(ingress, cascadeCleanupFinalizer)
+
+		return nil
+	}
+
+	AddFinalizer(ingress, cascadeCleanupFinalizer)
 	if ingress.Annotations == nil || ingress.Annotations[hostGeneratedAnnotation] == "" {
 		// Let's assign it a global hostname if any
 		generatedHost := fmt.Sprintf("%s.%s", xid.New(), *c.domain)
@@ -121,9 +146,9 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 		return err
 	}
 
-	// TODO(jmprusi): A leaf without rootIngress?
 	if !exists {
-		return fmt.Errorf("root Ingress not found: %s", rootName)
+		klog.Infof("deleting orphaned leaf ingress '%v' of nonexistant root ingress '%v'", ingress.Name, rootName)
+		return c.client.NetworkingV1().Ingresses(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
 	}
 
 	rootIngress = rootIf.(*networkingv1.Ingress).DeepCopy()
@@ -140,6 +165,7 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 		if err != nil && !errors.IsNotFound(err) {
 			return err
 		}
+		removeFinalizer(ingress, cascadeCleanupFinalizer)
 	} else if rootHostname != "" && len(ingress.Status.LoadBalancer.Ingress) > 0 {
 		// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
 		record, err := getDNSRecord(rootHostname, ingress)
@@ -382,4 +408,24 @@ func getRootName(ingress *networkingv1.Ingress) (rootName string, isLeaf bool) {
 	}
 
 	return
+}
+
+func AddFinalizer(ingress *networkingv1.Ingress, finalizer string) {
+	for _, v := range ingress.Finalizers {
+		if v == finalizer {
+			return
+		}
+	}
+	ingress.Finalizers = append(ingress.Finalizers, finalizer)
+}
+
+func removeFinalizer(ingress *networkingv1.Ingress, finalizer string) {
+	for i, v := range ingress.Finalizers {
+		if v == finalizer {
+			ingress.Finalizers[i] = ingress.Finalizers[len(ingress.Finalizers)-1]
+			ingress.Finalizers = ingress.Finalizers[:len(ingress.Finalizers)-1]
+			return
+		}
+	}
+
 }
