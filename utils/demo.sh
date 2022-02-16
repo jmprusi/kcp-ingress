@@ -4,7 +4,7 @@ export PATH=${PWD}/bin:$PATH
 
 # build the ingress-controller
 echo in $(pwd)
-make
+make build
 
 # clean up on script exit
 set -e pipefail
@@ -34,7 +34,7 @@ echo in $(pwd)
 export PATH=${PWD}/bin:$PATH
 
 # Start kcp itself
-rm -rf .kcp 
+rm -rf .kcp
 ./bin/kcp start --auto-publish-apis --resources-to-sync="ingresses.networking.k8s.io,deployments.apps,services" --push-mode --token-auth-file contrib/demo/workspaceKubectlPlugin-script/kcp-tokens \
     > /tmp/kcp.log 2>&1 &
 cleanup_commands+=( "kill $!" )
@@ -82,7 +82,7 @@ cleanup_commands+=( "kill $!" )
 export KUBECONFIG=.kcp/admin.kubeconfig
 
 kubectl create namespace default
-kubectl create secret generic kubeconfig --from-file=kubeconfig=${KUBECONFIG} 
+kubectl create secret generic kubeconfig --from-file=kubeconfig=${KUBECONFIG}
 kubectl apply -f contrib/demo/workspaceKubectlPlugin-script/workspace-shard.yaml
 
 # Note, we are still working through certificate configurations, so for
@@ -157,27 +157,26 @@ spec:
 $(kubectl --kubeconfig ~/.kube/config config view --flatten --minify --context kind-east|sed 's,^,    ,')
 EOF
 
-# # This part is broken by https://github.com/kcp-dev/kcp/issues/455
 # # ----------------------------------------------------------------------
 # # 2.1.7 Add a second Cluster
-# cat <<EOF | kubectl apply -f -
-# apiVersion: cluster.example.dev/v1alpha1
-# kind: Cluster
-# metadata:
-#   name: kind-west
-# spec:
-#   kubeconfig: |
-# $(kubectl --kubeconfig ~/.kube/config config view --flatten --minify --context kind-west|sed 's,^,    ,')
-# EOF
+cat <<EOF | kubectl apply -f -
+apiVersion: cluster.example.dev/v1alpha1
+kind: Cluster
+metadata:
+  name: kind-west
+spec:
+  kubeconfig: |
+$(kubectl --kubeconfig ~/.kube/config config view --flatten --minify --context kind-west|sed 's,^,    ,')
+EOF
 # # 2.1.8 Stop the first kind cluster
 # kind delete clusters east
 # echo ===================================================================
 # echo 2.1.9 Show the deployment moved
-# echo 
+# echo
 # echo $ kubectl get namespace default -o yaml
 # echo
 # echo ===================================================================
-# bash 
+# bash
 
 # Start the ingress controller and envoy
 ingress-controller -kubeconfig=.kcp/admin.kubeconfig -envoyxds -envoy-listener-port=8181 \
@@ -190,7 +189,7 @@ cleanup_commands+=( "kill $!" )
 
 echo ===================================================================
 echo "2.1.10 Add ingress to a single deployment with a single hostname, show traffic flowing to whichever kind cluster has the deployment"
-echo 
+echo
 echo $ curl -v -H "Host: kuard.kcp-apps.127.0.0.1.nip.io" http://localhost:8080
 echo
 echo ===================================================================
