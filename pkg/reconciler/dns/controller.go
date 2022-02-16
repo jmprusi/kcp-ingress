@@ -37,7 +37,7 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 		stopCh: stopCh,
 	}
 
-	dnsProvider, err := newAWSDNSProvider()
+	dnsProvider, err := createDNSProvider(*config.DNSProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,8 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 }
 
 type ControllerConfig struct {
-	Cfg *rest.Config
+	Cfg         *rest.Config
+	DNSProvider *string
 }
 
 type Controller struct {
@@ -181,6 +182,20 @@ func (c *Controller) process(key string) error {
 	}
 
 	return err
+}
+
+func createDNSProvider(dnsProviderName string) (dns.Provider, error) {
+	var dnsProvider dns.Provider
+	var dnsError error
+	switch dnsProviderName {
+	case "aws":
+		klog.Infof("Using aws dns provider")
+		dnsProvider, dnsError = newAWSDNSProvider()
+	default:
+		klog.Infof("Using fake dns provider")
+		dnsProvider = &dns.FakeProvider{}
+	}
+	return dnsProvider, dnsError
 }
 
 func newAWSDNSProvider() (dns.Provider, error) {
