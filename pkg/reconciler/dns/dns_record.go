@@ -47,6 +47,10 @@ func (c *Controller) reconcile(ctx context.Context, dnsRecord *v1.DNSRecord) err
 	if !dnsZoneStatusSlicesEqual(statuses, dnsRecord.Status.Zones) {
 		dnsRecord.Status.Zones = statuses
 		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
+		_, uerr := c.client.KuadrantV1().DNSRecords(dnsRecord.Namespace).UpdateStatus(ctx, dnsRecord, metav1.UpdateOptions{})
+		if uerr != nil {
+			return uerr
+		}
 	}
 	return nil
 }
@@ -200,7 +204,7 @@ func mergeConditions(conditions, updates []v1.DNSZoneCondition) []v1.DNSZoneCond
 }
 
 func conditionChanged(a, b v1.DNSZoneCondition) bool {
-	return a.Status != b.Status || a.Reason != b.Reason || a.Message != b.Message
+	return a.Status != b.Status || a.Reason != b.Reason
 }
 
 // dnsZoneStatusSlicesEqual compares two DNSZoneStatus slice values.  Returns
