@@ -307,8 +307,9 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 		vd.Labels[clusterLabel] = cl
 		vd.Labels[ownedByLabel] = root.Name
 
-		// Cleanup all the other owner references.
-		// TODO(jmprusi): Right now the syncer is syncing the OwnerReferences causing the ingresses to be deleted.
+		// Cleanup finalizers
+		vd.Finalizers = []string{}
+		// Cleanup owner references
 		vd.OwnerReferences = []metav1.OwnerReference{}
 		vd.SetResourceVersion("")
 
