@@ -17,7 +17,8 @@ const numThreads = 2
 var kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig")
 var kubecontext = flag.String("context", "", "Context to use in the Kubeconfig file, instead of the current context")
 
-var domain = flag.String("domain", "kcp-apps.127.0.0.1.nip.io", "The domain to use to expose ingresses")
+var domain = flag.String("domain", "hcpapps.net", "The domain to use to expose ingresses")
+var dnsProvider = flag.String("dns-provider", "aws", "The DNS provider being used [aws, fake]")
 
 var envoyEnableXDS = flag.Bool("envoyxds", false, "Start an Envoy control plane")
 var envoyXDSPort = flag.Uint("envoyxds-port", 18000, "Envoy control plane port")
@@ -51,5 +52,9 @@ func main() {
 	go func() {
 		ingress.NewController(controllerConfig).Start(numThreads)
 	}()
-	dns.NewController(&dns.ControllerConfig{Cfg: r}).Start(numThreads)
+	c, err := dns.NewController(&dns.ControllerConfig{Cfg: r, DNSProvider: dnsProvider})
+	if err != nil {
+		klog.Fatal(err)
+	}
+	c.Start(numThreads)
 }
