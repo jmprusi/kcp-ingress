@@ -2,7 +2,7 @@ all: vendor build
 .PHONY: all
 
 SHELL := /bin/bash
-
+NUM_CLUSTERS:= 2
 # go-get-tool will 'go get' any package $2 and install it to $1.
 # backing up and recovering the go.mod/go.sum as go install doesnt work
 # with project that use replacement directives, no time for a nicer solution.
@@ -50,7 +50,7 @@ kcp:
 
 .PHONY: local-setup
 local-setup: clean build kind kcp
-	./utils/local-setup.sh
+	./utils/local-setup.sh -c ${NUM_CLUSTERS}
 
 .PHONY: aws-setup
 aws-setup: clean kcp
