@@ -12,6 +12,7 @@ import (
 
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 	"github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions"
+	"github.com/kuadrant/kcp-glbc/pkg/net"
 	"github.com/kuadrant/kcp-glbc/pkg/reconciler/dns"
 	"github.com/kuadrant/kcp-glbc/pkg/reconciler/ingress"
 )
@@ -28,6 +29,7 @@ var domain = flag.String("domain", "hcpapps.net", "The domain to use to expose i
 var dnsProvider = flag.String("dns-provider", "aws", "The DNS provider being used [aws, fake]")
 
 func main() {
+	klog.InitFlags(nil)
 	flag.Parse()
 
 	var overrides clientcmd.ConfigOverrides
@@ -61,6 +63,12 @@ func main() {
 		DnsRecordClient:       dnsRecordClient,
 		SharedInformerFactory: kubeInformerFactory,
 		Domain:                domain,
+		HostResolver:          net.NewDefaultHostResolver(),
+		// For testing. TODO: Make configurable through flags/env variable
+		// HostResolver: &net.ConfigMapHostResolver{
+		// 	Name:      "hosts",
+		// 	Namespace: "default",
+		// },
 	}
 	ingressController := ingress.NewController(controllerConfig)
 
