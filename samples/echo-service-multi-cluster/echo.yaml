@@ -2,18 +2,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: echo-deployment-a
+  name: echo-deployment-1
   labels:
-    kcp.dev/cluster: kcp-cluster-a
+    kcp.dev/cluster: kcp-cluster-1
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: echo-server-a
+      app: echo-server-1
   template:
     metadata:
       labels:
-        app: echo-server-a
+        app: echo-server-1
     spec:
       containers:
         - name: echo-server
@@ -26,9 +26,9 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: httpecho-a
+  name: httpecho-1
   labels:
-    kcp.dev/cluster: kcp-cluster-a
+    kcp.dev/cluster: kcp-cluster-1
 spec:
   ports:
     - name: http-port
@@ -36,23 +36,23 @@ spec:
       targetPort: http-port
       protocol: TCP
   selector:
-    app: echo-server-a
+    app: echo-server-1
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: echo-deployment-b
+  name: echo-deployment-2
   labels:
-    kcp.dev/cluster: kcp-cluster-b
+    kcp.dev/cluster: kcp-cluster-2
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: echo-server-b
+      app: echo-server-2
   template:
     metadata:
       labels:
-        app: echo-server-b
+        app: echo-server-2
     spec:
       containers:
         - name: echo-server
@@ -65,9 +65,9 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: httpecho-b
+  name: httpecho-2
   labels:
-    kcp.dev/cluster: kcp-cluster-b
+    kcp.dev/cluster: kcp-cluster-2
 spec:
   ports:
     - name: http-port
@@ -75,4 +75,4 @@ spec:
       targetPort: http-port
       protocol: TCP
   selector:
-    app: echo-server-b
+    app: echo-server-2

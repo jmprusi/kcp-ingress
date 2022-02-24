@@ -11,7 +11,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: httpecho-a
+                name: httpecho-1
                 port:
                   number: 80
     - host: my-hostname.kcp-apps.127.0.0.1.nip.io
@@ -21,7 +21,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: httpecho-b
+                name: httpecho-2
                 port:
                   number: 80
 ---
@@ -38,7 +38,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: httpecho-a
+                name: httpecho-1
                 port:
                   number: 80
     - host: host.whatever.com
@@ -48,6 +48,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: httpecho-b
+                name: httpecho-2
                 port:
                   number: 80
