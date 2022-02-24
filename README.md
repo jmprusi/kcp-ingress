@@ -28,21 +28,27 @@ Now you can create a new ingress resource from the root of the project:
 ```bash 
 export KUBECONFIG=.kcp/admin.kubeconfig
 kubectl create namespace default
-kubectl apply -n default -f samples/echo.yaml
-kubectl apply -n default -f samples/ingress.yaml
+
+# Multi cluster
+kubectl apply -n default -f samples/echo-service-multi-cluster/echo.yaml
+kubectl apply -n default -f samples/echo-service-multi-cluster/ingress.yaml
+
+# single cluster
+kubectl apply -n default -f samples/echo-service-single-cluster/echo.yaml
+kubectl apply -n default -f samples/echo-service-single-cluster/ingress.yaml
 ```
 
 If errors are encountered about resources not existing, sometimes deleting the clusters from KCP and recreating them can solve the problem:
 
 Delete the clusters:
 ```bash 
-KUBECONFIG=.kcp/admin.kubeconfig kubectl delete cluster kcp-cluster-a
-KUBECONFIG=.kcp/admin.kubeconfig kubectl delete cluster kcp-cluster-b
+KUBECONFIG=.kcp/admin.kubeconfig kubectl delete cluster kcp-cluster-1
+KUBECONFIG=.kcp/admin.kubeconfig kubectl delete cluster kcp-cluster-2
 ```
 Recreate them:
 ```bash
-KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-a.yaml
-KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-b.yaml
+KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-1.yaml
+KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-2.yaml
 ```
 
 ## Envoy control plane
