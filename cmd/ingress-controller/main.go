@@ -2,17 +2,26 @@ package main
 
 import (
 	"flag"
+	"time"
 
+	genericapiserver "k8s.io/apiserver/pkg/server"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	envoyserver "knative.dev/net-kourier/pkg/envoy/server"
 
-	"github.com/kuadrant/kcp-ingress/pkg/reconciler/dns"
-	"github.com/kuadrant/kcp-ingress/pkg/reconciler/ingress"
+	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
+	"github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions"
+	"github.com/kuadrant/kcp-glbc/pkg/reconciler/dns"
+	"github.com/kuadrant/kcp-glbc/pkg/reconciler/ingress"
 )
 
-const numThreads = 2
+const (
+	numThreads   = 2
+	resyncPeriod = 10 * time.Hour
+)
 
 var kubeconfig = flag.String("kubeconfig", "", "Path to kubeconfig")
 var kubecontext = flag.String("context", "", "Context to use in the Kubeconfig file, instead of the current context")
@@ -39,22 +48,54 @@ func main() {
 		klog.Fatal(err)
 	}
 
-	controllerConfig := &ingress.ControllerConfig{
-		Cfg:    r,
-		Domain: domain,
-	}
+	ctx := genericapiserver.SetupSignalContext()
 
+	kubeClient, err := kubernetes.NewClusterForConfig(r)
+	if err != nil {
+		klog.Fatal(err)
+	}
+	kubeInformerFactory := informers.NewSharedInformerFactory(kubeClient.Cluster("*"), resyncPeriod)
+
+	dnsRecordClient, err := kuadrantv1.NewClusterForConfig(r)
+	if err != nil {
+		klog.Fatal(err)
+	}
+	kuadrantInformerFactory := externalversions.NewSharedInformerFactory(dnsRecordClient.Cluster("*"), resyncPeriod)
+
+	controllerConfig := &ingress.ControllerConfig{
+		KubeClient:            kubeClient,
+		DnsRecordClient:       dnsRecordClient,
+		SharedInformerFactory: kubeInformerFactory,
+		Domain:                domain,
+	}
 	if *envoyEnableXDS {
 		controllerConfig.EnvoyXDS = envoyserver.NewXdsServer(*envoyXDSPort, nil)
 		controllerConfig.EnvoyListenPort = envoyListenPort
 	}
+	ingressController := ingress.NewController(controllerConfig)
 
-	go func() {
-		ingress.NewController(controllerConfig).Start(numThreads)
-	}()
-	c, err := dns.NewController(&dns.ControllerConfig{Cfg: r, DNSProvider: dnsProvider})
+	dnsRecordController, err := dns.NewController(&dns.ControllerConfig{
+		DnsRecordClient:       dnsRecordClient,
+		SharedInformerFactory: kuadrantInformerFactory,
+		DNSProvider:           dnsProvider,
+	})
 	if err != nil {
 		klog.Fatal(err)
 	}
-	c.Start(numThreads)
+
+	kubeInformerFactory.Start(ctx.Done())
+	kubeInformerFactory.WaitForCacheSync(ctx.Done())
+
+	kuadrantInformerFactory.Start(ctx.Done())
+	kuadrantInformerFactory.WaitForCacheSync(ctx.Done())
+
+	go func() {
+		ingressController.Start(ctx, numThreads)
+	}()
+
+	go func() {
+		dnsRecordController.Start(ctx, numThreads)
+	}()
+
+	<-ctx.Done()
 }

@@ -5,7 +5,7 @@ package externalversions
 import (
 	"fmt"
 
-	v1 "github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
+	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
 )

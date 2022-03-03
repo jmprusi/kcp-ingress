@@ -3,8 +3,8 @@
 package kuadrant
 
 import (
-	internalinterfaces "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/informers/externalversions/internalinterfaces"
-	v1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/informers/externalversions/kuadrant/v1"
+	internalinterfaces "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions/internalinterfaces"
+	v1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions/kuadrant/v1"
 )
 
 // Interface provides access to each of this group's versions.

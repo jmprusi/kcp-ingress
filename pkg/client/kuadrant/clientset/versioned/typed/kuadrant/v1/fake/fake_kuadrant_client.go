@@ -3,7 +3,7 @@
 package fake
 
 import (
-	v1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned/typed/kuadrant/v1"
+	v1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned/typed/kuadrant/v1"
 	rest "k8s.io/client-go/rest"
 	testing "k8s.io/client-go/testing"
 )

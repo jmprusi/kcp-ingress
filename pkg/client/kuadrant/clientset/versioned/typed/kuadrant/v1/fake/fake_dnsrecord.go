@@ -5,7 +5,7 @@ package fake
 import (
 	"context"
 
-	kuadrantv1 "github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
+	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -101,7 +101,7 @@ func (c *FakeDNSRecords) UpdateStatus(ctx context.Context, dNSRecord *kuadrantv1
 // Delete takes name of the dNSRecord and deletes it. Returns an error if one occurs.
 func (c *FakeDNSRecords) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	_, err := c.Fake.
-		Invokes(testing.NewDeleteAction(dnsrecordsResource, c.ns, name), &kuadrantv1.DNSRecord{})
+		Invokes(testing.NewDeleteActionWithOptions(dnsrecordsResource, c.ns, name, opts), &kuadrantv1.DNSRecord{})
 
 	return err
 }

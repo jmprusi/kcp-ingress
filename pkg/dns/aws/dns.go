@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
-	"github.com/kuadrant/kcp-ingress/pkg/dns"
+	"github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
+	"github.com/kuadrant/kcp-glbc/pkg/dns"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/route53"
 
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 const (

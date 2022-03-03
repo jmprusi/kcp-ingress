@@ -10,31 +10,28 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
-	v1 "github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
-	kuadrantv1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned"
-	"github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/informers/externalversions"
-	kuadrantv1lister "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/listers/kuadrant/v1"
-	"github.com/kuadrant/kcp-ingress/pkg/dns"
-	awsdns "github.com/kuadrant/kcp-ingress/pkg/dns/aws"
+	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
+	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
+	"github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions"
+	kuadrantv1lister "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/listers/kuadrant/v1"
+	"github.com/kuadrant/kcp-glbc/pkg/dns"
+	awsdns "github.com/kuadrant/kcp-glbc/pkg/dns/aws"
 )
 
-const resyncPeriod = 10 * time.Hour
+const controllerName = "kcp-glbc-dns"
 
 // NewController returns a new Controller which reconciles DNSRecord.
 func NewController(config *ControllerConfig) (*Controller, error) {
-	client := kuadrantv1.NewForConfigOrDie(config.Cfg)
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
-	stopCh := make(chan struct{}) // TODO: hook this up to SIGTERM/SIGINT
 
 	c := &Controller{
-		queue:  queue,
-		client: client,
-		stopCh: stopCh,
+		queue:                 queue,
+		dnsRecordClient:       config.DnsRecordClient,
+		sharedInformerFactory: config.SharedInformerFactory,
 	}
 
 	dnsProvider, err := createDNSProvider(*config.DNSProvider)
@@ -56,41 +53,33 @@ func NewController(config *ControllerConfig) (*Controller, error) {
 	}
 	c.dnsZones = dnsZones
 
-	sif := externalversions.NewSharedInformerFactoryWithOptions(c.client, resyncPeriod)
-
 	// Watch for events related to DNSRecords
-	sif.Kuadrant().V1().DNSRecords().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	c.sharedInformerFactory.Kuadrant().V1().DNSRecords().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.enqueue(obj) },
 		UpdateFunc: func(_, obj interface{}) { c.enqueue(obj) },
 		DeleteFunc: func(obj interface{}) { c.enqueue(obj) },
 	})
 
-	sif.Start(stopCh)
-	for inf, sync := range sif.WaitForCacheSync(stopCh) {
-		if !sync {
-			klog.Fatalf("Failed to sync %s", inf)
-		}
-	}
-
-	c.indexer = sif.Kuadrant().V1().DNSRecords().Informer().GetIndexer()
-	c.lister = sif.Kuadrant().V1().DNSRecords().Lister()
+	c.indexer = c.sharedInformerFactory.Kuadrant().V1().DNSRecords().Informer().GetIndexer()
+	c.lister = c.sharedInformerFactory.Kuadrant().V1().DNSRecords().Lister()
 
 	return c, nil
 }
 
 type ControllerConfig struct {
-	Cfg         *rest.Config
-	DNSProvider *string
+	DnsRecordClient       kuadrantv1.ClusterInterface
+	SharedInformerFactory externalversions.SharedInformerFactory
+	DNSProvider           *string
 }
 
 type Controller struct {
-	queue       workqueue.RateLimitingInterface
-	client      kuadrantv1.Interface
-	stopCh      chan struct{}
-	indexer     cache.Indexer
-	lister      kuadrantv1lister.DNSRecordLister
-	dnsProvider dns.Provider
-	dnsZones    []v1.DNSZone
+	queue                 workqueue.RateLimitingInterface
+	sharedInformerFactory externalversions.SharedInformerFactory
+	dnsRecordClient       kuadrantv1.ClusterInterface
+	indexer               cache.Indexer
+	lister                kuadrantv1lister.DNSRecordLister
+	dnsProvider           dns.Provider
+	dnsZones              []v1.DNSZone
 }
 
 func (c *Controller) enqueue(obj interface{}) {
@@ -102,22 +91,26 @@ func (c *Controller) enqueue(obj interface{}) {
 	c.queue.AddRateLimited(key)
 }
 
-func (c *Controller) Start(numThreads int) {
+func (c *Controller) Start(ctx context.Context, numThreads int) {
+	defer runtime.HandleCrash()
 	defer c.queue.ShutDown()
+
+	klog.InfoS("Starting workers", "controller", controllerName)
+	defer klog.InfoS("Stopping workers", "controller", controllerName)
+
 	for i := 0; i < numThreads; i++ {
-		go wait.Until(c.startWorker, time.Second, c.stopCh)
+		go wait.UntilWithContext(ctx, c.startWorker, time.Second)
 	}
-	klog.Infof("Starting dns workers")
-	<-c.stopCh
-	klog.Infof("Stopping dns workers")
+
+	<-ctx.Done()
 }
 
-func (c *Controller) startWorker() {
-	for c.processNextWorkItem() {
+func (c *Controller) startWorker(ctx context.Context) {
+	for c.processNextWorkItem(ctx) {
 	}
 }
 
-func (c *Controller) processNextWorkItem() bool {
+func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 	// Wait until there is a new item in the working queue
 	k, quit := c.queue.Get()
 	if quit {
@@ -129,7 +122,7 @@ func (c *Controller) processNextWorkItem() bool {
 	// other workers.
 	defer c.queue.Done(key)
 
-	err := c.process(key)
+	err := c.process(ctx, key)
 	c.handleErr(err, key)
 	return true
 }
@@ -155,7 +148,7 @@ func (c *Controller) handleErr(err error, key string) {
 	klog.Infof("Dropping key %q after failed retries: %v", key, err)
 }
 
-func (c *Controller) process(key string) error {
+func (c *Controller) process(ctx context.Context, key string) error {
 	obj, exists, err := c.indexer.GetByKey(key)
 	if err != nil {
 		return err
@@ -170,15 +163,14 @@ func (c *Controller) process(key string) error {
 
 	previous := current.DeepCopy()
 
-	ctx := context.TODO()
 	if err := c.reconcile(ctx, current); err != nil {
 		return err
 	}
 
 	// If the object being reconciled changed as a result, update it.
 	if !equality.Semantic.DeepEqual(previous, current) {
-		_, uerr := c.client.KuadrantV1().DNSRecords(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
-		return uerr
+		_, err := c.dnsRecordClient.Cluster(current.ClusterName).KuadrantV1().DNSRecords(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
+		return err
 	}
 
 	return err

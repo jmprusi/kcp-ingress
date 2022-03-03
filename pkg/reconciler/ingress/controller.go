@@ -13,35 +13,31 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	networkingv1lister "k8s.io/client-go/listers/networking/v1"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	envoyserver "knative.dev/net-kourier/pkg/envoy/server"
 
-	kuadrantv1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned/typed/kuadrant/v1"
-	"github.com/kuadrant/kcp-ingress/pkg/envoy"
+	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
+	"github.com/kuadrant/kcp-glbc/pkg/envoy"
 )
 
-const resyncPeriod = 10 * time.Hour
+const controllerName = "kcp-glbc-ingress"
 
 // NewController returns a new Controller which splits new Ingress objects
 // into N virtual Ingresses labeled for each Cluster that exists at the time
 // the Ingress is created.
 func NewController(config *ControllerConfig) *Controller {
-	client := kubernetes.NewForConfigOrDie(config.Cfg)
-	dnsRecordClient := kuadrantv1.NewForConfigOrDie(config.Cfg)
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
-	stopCh := make(chan struct{}) // TODO: hook this up to SIGTERM/SIGINT
 
 	c := &Controller{
-		queue:           queue,
-		client:          client,
-		dnsRecordClient: dnsRecordClient,
-		stopCh:          stopCh,
-		domain:          config.Domain,
-		tracker:         *NewTracker(),
+		queue:                 queue,
+		kubeClient:            config.KubeClient,
+		sharedInformerFactory: config.SharedInformerFactory,
+		dnsRecordClient:       config.DnsRecordClient,
+		domain:                config.Domain,
+		tracker:               newTracker(),
 	}
 
 	if config.EnvoyXDS != nil {
@@ -56,53 +52,46 @@ func NewController(config *ControllerConfig) *Controller {
 		}()
 	}
 
-	sif := informers.NewSharedInformerFactoryWithOptions(c.client, resyncPeriod)
-
 	// Watch for events related to Ingresses
-	sif.Networking().V1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	c.sharedInformerFactory.Networking().V1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { c.enqueue(obj) },
 		UpdateFunc: func(_, obj interface{}) { c.enqueue(obj) },
 		DeleteFunc: func(obj interface{}) { c.enqueue(obj) },
 	})
 
 	// Watch for events related to Services
-	sif.Core().V1().Services().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	c.sharedInformerFactory.Core().V1().Services().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: func(_, obj interface{}) { c.ingressesFromService(obj) },
 		DeleteFunc: func(obj interface{}) { c.ingressesFromService(obj) },
 	})
 
-	sif.Start(stopCh)
-	for inf, sync := range sif.WaitForCacheSync(stopCh) {
-		if !sync {
-			klog.Fatalf("Failed to sync %s", inf)
-		}
-	}
-
-	c.indexer = sif.Networking().V1().Ingresses().Informer().GetIndexer()
-	c.lister = sif.Networking().V1().Ingresses().Lister()
+	c.indexer = c.sharedInformerFactory.Networking().V1().Ingresses().Informer().GetIndexer()
+	c.lister = c.sharedInformerFactory.Networking().V1().Ingresses().Lister()
 
 	return c
 }
 
 type ControllerConfig struct {
-	Cfg             *rest.Config
-	EnvoyXDS        *envoyserver.XdsServer
-	Domain          *string
-	EnvoyListenPort *uint
+	KubeClient            kubernetes.ClusterInterface
+	DnsRecordClient       kuadrantv1.ClusterInterface
+	SharedInformerFactory informers.SharedInformerFactory
+	EnvoyXDS              *envoyserver.XdsServer
+	Domain                *string
+	EnvoyListenPort       *uint
 }
 
 type Controller struct {
-	queue           workqueue.RateLimitingInterface
-	client          kubernetes.Interface
-	dnsRecordClient kuadrantv1.KuadrantV1Interface
-	stopCh          chan struct{}
-	indexer         cache.Indexer
-	lister          networkingv1lister.IngressLister
-	envoyXDS        *envoyserver.XdsServer
-	envoyListenPort *uint
-	cache           *envoy.Cache
-	domain          *string
-	tracker         Tracker
+	queue                 workqueue.RateLimitingInterface
+	kubeClient            kubernetes.ClusterInterface
+	sharedInformerFactory informers.SharedInformerFactory
+	dnsRecordClient       kuadrantv1.ClusterInterface
+	indexer               cache.Indexer
+	lister                networkingv1lister.IngressLister
+	envoyXDS              *envoyserver.XdsServer
+	envoyListenPort       *uint
+	cache                 *envoy.Cache
+	domain                *string
+	tracker               tracker
 }
 
 func (c *Controller) enqueue(obj interface{}) {
@@ -114,22 +103,26 @@ func (c *Controller) enqueue(obj interface{}) {
 	c.queue.AddRateLimited(key)
 }
 
-func (c *Controller) Start(numThreads int) {
+func (c *Controller) Start(ctx context.Context, numThreads int) {
+	defer runtime.HandleCrash()
 	defer c.queue.ShutDown()
+
+	klog.InfoS("Starting workers", "controller", controllerName)
+	defer klog.InfoS("Stopping workers", "controller", controllerName)
+
 	for i := 0; i < numThreads; i++ {
-		go wait.Until(c.startWorker, time.Second, c.stopCh)
+		go wait.UntilWithContext(ctx, c.startWorker, time.Second)
 	}
-	klog.Infof("Starting workers")
-	<-c.stopCh
-	klog.Infof("Stopping workers")
+
+	<-ctx.Done()
 }
 
-func (c *Controller) startWorker() {
-	for c.processNextWorkItem() {
+func (c *Controller) startWorker(ctx context.Context) {
+	for c.processNextWorkItem(ctx) {
 	}
 }
 
-func (c *Controller) processNextWorkItem() bool {
+func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 	// Wait until there is a new item in the working queue
 	k, quit := c.queue.Get()
 	if quit {
@@ -141,7 +134,7 @@ func (c *Controller) processNextWorkItem() bool {
 	// other workers.
 	defer c.queue.Done(key)
 
-	err := c.process(key)
+	err := c.process(ctx, key)
 	c.handleErr(err, key)
 	return true
 }
@@ -167,7 +160,7 @@ func (c *Controller) handleErr(err error, key string) {
 	klog.Infof("Dropping key %q after failed retries: %v", key, err)
 }
 
-func (c *Controller) process(key string) error {
+func (c *Controller) process(ctx context.Context, key string) error {
 	obj, exists, err := c.indexer.GetByKey(key)
 	if err != nil {
 		return err
@@ -189,8 +182,6 @@ func (c *Controller) process(key string) error {
 
 	previous := current.DeepCopy()
 
-	ctx := context.TODO()
-
 	rootName, isLeaf := getRootName(current)
 	if isLeaf {
 		err = c.reconcileLeaf(ctx, rootName, current)
@@ -203,8 +194,8 @@ func (c *Controller) process(key string) error {
 
 	// If the object being reconciled changed as a result, update it.
 	if !equality.Semantic.DeepEqual(previous, current) {
-		_, uerr := c.client.NetworkingV1().Ingresses(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
-		return uerr
+		_, err := c.kubeClient.Cluster(current.ClusterName).NetworkingV1().Ingresses(current.Namespace).Update(ctx, current, metav1.UpdateOptions{})
+		return err
 	}
 
 	return err
@@ -212,15 +203,20 @@ func (c *Controller) process(key string) error {
 
 // ingressesFromService enqueues all the related ingresses for a given service.
 func (c *Controller) ingressesFromService(obj interface{}) {
+	service := obj.(*corev1.Service)
+
+	serviceKey, err := cache.MetaNamespaceKeyFunc(service)
+	if err != nil {
+		runtime.HandleError(err)
+		return
+	}
+
 	// Does that Service has any Ingress associated to?
-	ingresses, ok := c.tracker.getIngress(obj.(*corev1.Service))
-	if ok {
-		// One Service can be referenced by 0..n Ingresses, so we need to enqueue all the related ingreses.
-		for _, ingress := range ingresses {
-			klog.Infof("tracked service %q triggered Ingress %q reconciliation", obj.(*corev1.Service).Name, ingress.Name)
-			c.enqueue(ingress.DeepCopy())
-		}
-	} else {
-		klog.Info("Ignoring non-tracked service: ", obj.(*corev1.Service).Name)
+	ingresses := c.tracker.getIngressesForService(serviceKey)
+
+	// One Service can be referenced by 0..n Ingresses, so we need to enqueue all the related ingreses.
+	for _, ingress := range ingresses.List() {
+		klog.Infof("tracked service %q triggered Ingress %q reconciliation", service.Name, ingress)
+		c.queue.Add(ingress)
 	}
 }

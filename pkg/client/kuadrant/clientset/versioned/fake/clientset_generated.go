@@ -3,9 +3,9 @@
 package fake
 
 import (
-	clientset "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned"
-	kuadrantv1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned/typed/kuadrant/v1"
-	fakekuadrantv1 "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned/typed/kuadrant/v1/fake"
+	clientset "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
+	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned/typed/kuadrant/v1"
+	fakekuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned/typed/kuadrant/v1/fake"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
