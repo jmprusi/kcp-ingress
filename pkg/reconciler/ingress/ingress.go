@@ -78,6 +78,12 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		return nil
 	}
 
+	// verifies custom hosts and if they are present and the flag is set to false
+	// the reconciliation will fail
+	if !*c.customHosts && validateCustomHosts(ingress, *c.domain) {
+		return fmt.Errorf("failed ingress '%s' reconciliation due to custom hosts", ingress.Name)
+	}
+
 	AddFinalizer(ingress, cascadeCleanupFinalizer)
 	if ingress.Annotations == nil || ingress.Annotations[cluster.ANNOTATION_HCG_HOST] == "" {
 		// Let's assign it a global hostname if any

@@ -34,6 +34,8 @@ var region = flag.String("region", "eu-central-1", "the region we should target 
 var kubecontext = flag.String("context", "", "Context to use in the Kubeconfig file, instead of the current context")
 
 var domain = flag.String("domain", "hcpapps.net", "The domain to use to expose ingresses")
+var customHosts = flag.Bool("custom-hosts", true, "Flag to enable hosts to be custom")
+
 var dnsProvider = flag.String("dns-provider", "aws", "The DNS provider being used [aws, fake]")
 
 func main() {
