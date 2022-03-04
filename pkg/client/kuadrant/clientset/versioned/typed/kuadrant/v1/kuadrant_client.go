@@ -3,8 +3,10 @@
 package v1
 
 import (
-	v1 "github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
-	"github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned/scheme"
+	"net/http"
+
+	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
+	"github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned/scheme"
 	rest "k8s.io/client-go/rest"
 )
 
@@ -16,6 +18,7 @@ type KuadrantV1Interface interface {
 // KuadrantV1Client is used to interact with features provided by the kuadrant.dev group.
 type KuadrantV1Client struct {
 	restClient rest.Interface
+	cluster    string
 }
 
 func (c *KuadrantV1Client) DNSRecords(namespace string) DNSRecordInterface {
@@ -23,16 +26,32 @@ func (c *KuadrantV1Client) DNSRecords(namespace string) DNSRecordInterface {
 }
 
 // NewForConfig creates a new KuadrantV1Client for the given config.
+// NewForConfig is equivalent to NewForConfigAndClient(c, httpClient),
+// where httpClient was generated with rest.HTTPClientFor(c).
 func NewForConfig(c *rest.Config) (*KuadrantV1Client, error) {
 	config := *c
 	if err := setConfigDefaults(&config); err != nil {
 		return nil, err
 	}
-	client, err := rest.RESTClientFor(&config)
+	httpClient, err := rest.HTTPClientFor(&config)
 	if err != nil {
 		return nil, err
 	}
-	return &KuadrantV1Client{client}, nil
+	return NewForConfigAndClient(&config, httpClient)
+}
+
+// NewForConfigAndClient creates a new KuadrantV1Client for the given config and http client.
+// Note the http client provided takes precedence over the configured transport values.
+func NewForConfigAndClient(c *rest.Config, h *http.Client) (*KuadrantV1Client, error) {
+	config := *c
+	if err := setConfigDefaults(&config); err != nil {
+		return nil, err
+	}
+	client, err := rest.RESTClientForConfigAndClient(&config, h)
+	if err != nil {
+		return nil, err
+	}
+	return &KuadrantV1Client{restClient: client}, nil
 }
 
 // NewForConfigOrDie creates a new KuadrantV1Client for the given config and
@@ -47,7 +66,12 @@ func NewForConfigOrDie(c *rest.Config) *KuadrantV1Client {
 
 // New creates a new KuadrantV1Client for the given RESTClient.
 func New(c rest.Interface) *KuadrantV1Client {
-	return &KuadrantV1Client{c}
+	return &KuadrantV1Client{restClient: c}
+}
+
+// NewWithCluster creates a new KuadrantV1Client for the given RESTClient and cluster.
+func NewWithCluster(c rest.Interface, cluster string) *KuadrantV1Client {
+	return &KuadrantV1Client{restClient: c, cluster: cluster}
 }
 
 func setConfigDefaults(config *rest.Config) error {

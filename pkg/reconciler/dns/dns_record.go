@@ -5,15 +5,16 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
-	"github.com/kuadrant/kcp-ingress/pkg/util/slice"
-
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilclock "k8s.io/apimachinery/pkg/util/clock"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
+
+	"github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
+	"github.com/kuadrant/kcp-glbc/pkg/util/slice"
 )
 
 type ConditionStatus string
@@ -47,15 +48,15 @@ func (c *Controller) reconcile(ctx context.Context, dnsRecord *v1.DNSRecord) err
 	if !dnsZoneStatusSlicesEqual(statuses, dnsRecord.Status.Zones) {
 		dnsRecord.Status.Zones = statuses
 		dnsRecord.Status.ObservedGeneration = dnsRecord.Generation
-		_, uerr := c.client.KuadrantV1().DNSRecords(dnsRecord.Namespace).UpdateStatus(ctx, dnsRecord, metav1.UpdateOptions{})
-		if uerr != nil {
-			return uerr
+		_, err := c.dnsRecordClient.Cluster(dnsRecord.ClusterName).KuadrantV1().DNSRecords(dnsRecord.Namespace).UpdateStatus(ctx, dnsRecord, metav1.UpdateOptions{})
+		if err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (r *Controller) publishRecordToZones(zones []v1.DNSZone, record *v1.DNSRecord) []v1.DNSZoneStatus {
+func (c *Controller) publishRecordToZones(zones []v1.DNSZone, record *v1.DNSRecord) []v1.DNSZoneStatus {
 	var statuses []v1.DNSZoneStatus
 	for i := range zones {
 		zone := zones[i]
@@ -77,7 +78,7 @@ func (r *Controller) publishRecordToZones(zones []v1.DNSZone, record *v1.DNSReco
 		if recordIsAlreadyPublishedToZone(record, &zone) {
 			klog.Info("replacing DNS record", "record", record.Spec, "dnszone", zone)
 
-			if err := r.dnsProvider.Ensure(record, zone); err != nil {
+			if err := c.dnsProvider.Ensure(record, zone); err != nil {
 				klog.Error(err, "failed to replace DNS record in zone", "record", record.Spec, "dnszone", zone)
 				condition.Status = string(ConditionTrue)
 				condition.Reason = "ProviderError"
@@ -89,7 +90,7 @@ func (r *Controller) publishRecordToZones(zones []v1.DNSZone, record *v1.DNSReco
 				condition.Message = "The DNS provider succeeded in replacing the record"
 			}
 		} else {
-			if err := r.dnsProvider.Ensure(record, zone); err != nil {
+			if err := c.dnsProvider.Ensure(record, zone); err != nil {
 				klog.Error(err, "failed to publish DNS record to zone", "record", record.Spec, "dnszone", zone)
 				condition.Status = string(ConditionTrue)
 				condition.Reason = "ProviderError"
@@ -109,7 +110,7 @@ func (r *Controller) publishRecordToZones(zones []v1.DNSZone, record *v1.DNSReco
 	return mergeStatuses(zones, record.Status.DeepCopy().Zones, statuses)
 }
 
-func (r *Controller) deleteRecord(record *v1.DNSRecord) error {
+func (c *Controller) deleteRecord(record *v1.DNSRecord) error {
 	var errs []error
 	for i := range record.Status.Zones {
 		zone := record.Status.Zones[i].DNSZone
@@ -118,7 +119,7 @@ func (r *Controller) deleteRecord(record *v1.DNSRecord) error {
 		if !recordIsAlreadyPublishedToZone(record, &zone) {
 			continue
 		}
-		err := r.dnsProvider.Delete(record, zone)
+		err := c.dnsProvider.Delete(record, zone)
 		if err != nil {
 			errs = append(errs, err)
 		} else {

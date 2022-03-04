@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/rs/xid"
-	"k8s.io/apimachinery/pkg/util/json"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -17,12 +16,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/utils/pointer"
 
-	v1 "github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
-	"github.com/kuadrant/kcp-ingress/pkg/envoy"
+	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
+	"github.com/kuadrant/kcp-glbc/pkg/envoy"
 )
 
 const (
@@ -46,13 +46,13 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		currentLeaves, err := c.lister.List(sel)
 		klog.Infof("found %v leaf ingresses", len(currentLeaves))
 		for _, leaf := range currentLeaves {
-			err = c.client.NetworkingV1().Ingresses(leaf.Namespace).Delete(ctx, leaf.Name, metav1.DeleteOptions{})
+			err = c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Delete(ctx, leaf.Name, metav1.DeleteOptions{})
 			if err != nil {
 				return err
 			}
 		}
 		// delete DNSRecord
-		err = c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+		err = c.dnsRecordClient.Cluster(ingress.ClusterName).KuadrantV1().DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
 		if err != nil && !errors.IsNotFound(err) {
 			return err
 		}
@@ -93,7 +93,7 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 	for _, leftover := range findNonDesiredLeaves(currentLeaves, desiredLeaves) {
 		// The clean-up, i.e., removal of the DNS records, will be done in the next reconciliation cycle
 		klog.Infof("Deleting non desired leaf %q", leftover.Name)
-		if err := c.client.NetworkingV1().Ingresses(leftover.Namespace).Delete(ctx, leftover.Name, metav1.DeleteOptions{}); err != nil {
+		if err := c.kubeClient.Cluster(leftover.ClusterName).NetworkingV1().Ingresses(leftover.Namespace).Delete(ctx, leftover.Name, metav1.DeleteOptions{}); err != nil {
 			return err
 		}
 	}
@@ -101,9 +101,9 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 	// TODO(jmprusi): ugly. fix. use indexer, etc.
 	// Create and/or update the desired leaves
 	for _, leaf := range desiredLeaves {
-		if _, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Create(ctx, leaf, metav1.CreateOptions{}); err != nil {
+		if _, err := c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Create(ctx, leaf, metav1.CreateOptions{}); err != nil {
 			if errors.IsAlreadyExists(err) {
-				existingLeaf, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Get(ctx, leaf.Name, metav1.GetOptions{})
+				existingLeaf, err := c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Get(ctx, leaf.Name, metav1.GetOptions{})
 				if err != nil {
 					return err
 				}
@@ -112,7 +112,7 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 				leaf.ResourceVersion = existingLeaf.ResourceVersion
 				leaf.UID = existingLeaf.UID
 
-				if _, err := c.client.NetworkingV1().Ingresses(leaf.Namespace).Update(ctx, leaf, metav1.UpdateOptions{}); err != nil {
+				if _, err := c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Update(ctx, leaf, metav1.UpdateOptions{}); err != nil {
 					return err
 				}
 			} else {
@@ -128,7 +128,7 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		if err != nil {
 			return err
 		}
-		_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
+		_, err = c.dnsRecordClient.Cluster(record.ClusterName).KuadrantV1().DNSRecords(record.Namespace).Create(ctx, record, metav1.CreateOptions{})
 		if err != nil {
 			if !errors.IsAlreadyExists(err) {
 				return err
@@ -137,13 +137,13 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 			if err != nil {
 				return err
 			}
-			_, err = c.dnsRecordClient.DNSRecords(record.Namespace).Patch(ctx, record.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
+			_, err = c.dnsRecordClient.Cluster(record.ClusterName).KuadrantV1().DNSRecords(record.Namespace).Patch(ctx, record.Name, types.ApplyPatchType, data, metav1.PatchOptions{FieldManager: manager, Force: pointer.Bool(true)})
 			if err != nil {
 				return err
 			}
 		}
 	} else {
-		err := c.dnsRecordClient.DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+		err := c.dnsRecordClient.Cluster(ingress.ClusterName).KuadrantV1().DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
 		if err != nil && !errors.IsNotFound(err) {
 			return err
 		}
@@ -168,9 +168,9 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 
 	rootIf, exists, err := c.indexer.Get(&v1beta1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
+			ClusterName: ingress.ClusterName,
 			Namespace:   ingress.Namespace,
 			Name:        rootName,
-			ClusterName: ingress.GetClusterName(),
 		},
 	})
 	if err != nil {
@@ -178,8 +178,8 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 	}
 
 	if !exists {
-		klog.Infof("deleting orphaned leaf ingress '%v' of nonexistant root ingress '%v'", ingress.Name, rootName)
-		return c.client.NetworkingV1().Ingresses(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
+		klog.Infof("deleting orphaned leaf ingress '%v' of missing root ingress '%v'", ingress.Name, rootName)
+		return c.kubeClient.Cluster(ingress.ClusterName).NetworkingV1().Ingresses(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
 	}
 
 	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
@@ -211,7 +211,7 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 	}
 
 	// Update the root Ingress status with our desired LB.
-	if _, err := c.client.NetworkingV1().Ingresses(rootIngress.Namespace).UpdateStatus(ctx, rootIngress, metav1.UpdateOptions{}); err != nil {
+	if _, err := c.kubeClient.Cluster(rootIngress.ClusterName).NetworkingV1().Ingresses(rootIngress.Namespace).UpdateStatus(ctx, rootIngress, metav1.UpdateOptions{}); err != nil {
 		if errors.IsConflict(err) {
 			key, err := cache.MetaNamespaceKeyFunc(ingress)
 			if err != nil {
@@ -251,8 +251,9 @@ func getDNSRecord(hostname string, ingress *networkingv1.Ingress) (*v1.DNSRecord
 			Kind:       "DNSRecord",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ingress.Namespace,
-			Name:      ingress.Name,
+			ClusterName: ingress.ClusterName,
+			Namespace:   ingress.Namespace,
+			Name:        ingress.Name,
 		},
 		Spec: v1.DNSRecordSpec{
 			DNSName:    hostname,
@@ -359,7 +360,7 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 	var services []*corev1.Service
 	for _, rule := range ingress.Spec.Rules {
 		for _, path := range rule.HTTP.Paths {
-			svc, err := c.client.CoreV1().Services(ingress.Namespace).Get(ctx, path.Backend.Service.Name, metav1.GetOptions{})
+			svc, err := c.kubeClient.Cluster(ingress.ClusterName).CoreV1().Services(ingress.Namespace).Get(ctx, path.Backend.Service.Name, metav1.GetOptions{})
 			// TODO(jmprusi): If one of the services doesn't exist, we invalidate all the other ones.. review this.
 			if err != nil {
 				return nil, err
@@ -371,7 +372,7 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 }
 
 func (c *Controller) patchIngress(ctx context.Context, ingress *networkingv1.Ingress, data []byte) error {
-	i, err := c.client.NetworkingV1().Ingresses(ingress.Namespace).
+	i, err := c.kubeClient.Cluster(ingress.ClusterName).NetworkingV1().Ingresses(ingress.Namespace).
 		Patch(ctx, ingress.Name, types.MergePatchType, data, metav1.PatchOptions{FieldManager: manager})
 	if err != nil {
 		return err

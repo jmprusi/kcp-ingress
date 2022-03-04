@@ -7,9 +7,9 @@ import (
 	sync "sync"
 	time "time"
 
-	versioned "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/clientset/versioned"
-	internalinterfaces "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/informers/externalversions/internalinterfaces"
-	kuadrant "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/informers/externalversions/kuadrant"
+	versioned "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
+	internalinterfaces "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions/internalinterfaces"
+	kuadrant "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions/kuadrant"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"

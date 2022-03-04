@@ -3,7 +3,7 @@
 package v1
 
 import (
-	internalinterfaces "github.com/kuadrant/kcp-ingress/pkg/client/kuadrant/informers/externalversions/internalinterfaces"
+	internalinterfaces "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions/internalinterfaces"
 )
 
 // Interface provides access to all the informers in this group version.

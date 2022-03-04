@@ -3,70 +3,88 @@ package ingress
 import (
 	"sync"
 
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	"k8s.io/klog"
-
-	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
+	k8scache "k8s.io/client-go/tools/cache"
+	"k8s.io/klog/v2"
 )
 
-// TODO(jmprusi): Generalize.
-type Tracker struct {
-	mu                sync.Mutex
-	trackedServices   map[string][]networkingv1.Ingress
-	ingressToServices map[string]map[string]struct{}
+// tracker is used to track the relationship between services and ingresses.
+// It is used to determine which ingresses are affected by a service change and
+// trigger a reconciliation of the affected ingresses.
+type tracker struct {
+	lock               sync.Mutex
+	serviceToIngresses map[string]sets.String
+	ingressToServices  map[string]sets.String
 }
 
-func NewTracker() *Tracker {
-	return &Tracker{
-		trackedServices:   make(map[string][]networkingv1.Ingress),
-		ingressToServices: make(map[string]map[string]struct{}),
+// newTracker creates a new tracker.
+func newTracker() tracker {
+	return tracker{
+		serviceToIngresses: make(map[string]sets.String),
+		ingressToServices:  make(map[string]sets.String),
 	}
 }
 
-func (t *Tracker) getIngress(service *v1.Service) ([]networkingv1.Ingress, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	s, ok := t.trackedServices[serviceToKey(service)]
-	return s, ok
+// getIngressesForService returns the list of ingresses that are related to a given service.
+func (t *tracker) getIngressesForService(key string) sets.String {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	ingresses, ok := t.serviceToIngresses[key]
+	if !ok {
+		return sets.String{}
+	}
+
+	return ingresses
 }
 
-func (t *Tracker) add(ingress *networkingv1.Ingress, s *v1.Service) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// Adds a service to an ingress (key) to be tracked.
+func (t *tracker) add(ingress *networkingv1.Ingress, s *corev1.Service) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
 	klog.Infof("tracking service %q for ingress %q", s.Name, ingress.Name)
-	for _, ti := range t.trackedServices[serviceToKey(s)] {
-		if ingressToKey(&ti) == ingressToKey(ingress) {
-			return
-		}
+
+	ingressKey, err := k8scache.MetaNamespaceKeyFunc(ingress)
+	if err != nil {
+		klog.Errorf("Failed to get ingress key: %v", err)
+		return
 	}
-	t.trackedServices[serviceToKey(s)] = append(t.trackedServices[serviceToKey(s)], *ingress)
-	t.ingressToServices[ingressToKey(ingress)] = make(map[string]struct{})
-	t.ingressToServices[ingressToKey(ingress)][serviceToKey(s)] = struct{}{}
+
+	serviceKey, err := k8scache.MetaNamespaceKeyFunc(s)
+	if err != nil {
+		klog.Errorf("Failed to get service key: %v", err)
+		return
+	}
+
+	if t.serviceToIngresses[serviceKey] == nil {
+		t.serviceToIngresses[serviceKey] = sets.NewString()
+	}
+
+	t.serviceToIngresses[serviceKey].Insert(ingressKey)
+
+	if t.ingressToServices[ingressKey] == nil {
+		t.ingressToServices[ingressKey] = sets.NewString()
+	}
+
+	t.ingressToServices[ingressKey].Insert(serviceKey)
 }
 
-func (t *Tracker) deleteIngress(ingressKey string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// deleteIngress deletes an ingress from all the tracked services
+func (t *tracker) deleteIngress(ingressKey string) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
 
-	for serviceKey := range t.ingressToServices[ingressKey] {
-		for i, ing := range t.trackedServices[serviceKey] {
-			if ingressToKey(&ing) == ingressKey {
-				t.trackedServices[serviceKey] = append(t.trackedServices[serviceKey][:i], t.trackedServices[serviceKey][i+1:]...)
-				break
-			}
-		}
-		// This service is no longer being tracked by another ingress, so let's delete it.
-		if len(t.trackedServices[serviceKey]) == 0 {
-			delete(t.trackedServices, serviceKey)
-		}
+	services, ok := t.ingressToServices[ingressKey]
+	if !ok {
+		return
 	}
+
+	for _, serviceKey := range services.List() {
+		t.serviceToIngresses[serviceKey].Delete(ingressKey)
+	}
+
 	delete(t.ingressToServices, ingressKey)
-}
-
-func serviceToKey(service *v1.Service) string {
-	return service.Namespace + "/" + service.ClusterName + "#$#" + service.Name
-}
-
-func ingressToKey(ingress *networkingv1.Ingress) string {
-	return ingress.Namespace + "/" + ingress.ClusterName + "#$#" + ingress.Name
 }

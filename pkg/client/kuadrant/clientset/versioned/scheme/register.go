@@ -3,7 +3,7 @@
 package scheme
 
 import (
-	kuadrantv1 "github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
+	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"

@@ -1,7 +1,7 @@
 package dns
 
 import (
-	v1 "github.com/kuadrant/kcp-ingress/pkg/apis/kuadrant/v1"
+	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 )
 
 // Provider knows how to manage DNS zones only as pertains to routing.
