@@ -9,8 +9,6 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
@@ -57,22 +55,6 @@ func NewController(config *ControllerConfig) *Controller {
 		),
 	}
 	c.hostsWatcher.OnChange = c.synchronisedEnque()
-
-	certResource := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
-	c.glbcSharedInformerFactory.ForResource(certResource).Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			u := obj.(*unstructured.Unstructured)
-			klog.Infof("certificates add %v", u.GetName())
-		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			u := newObj.(*unstructured.Unstructured)
-			klog.Infof("certificates update %v", u.GetName())
-		},
-		DeleteFunc: func(obj interface{}) {
-			u := obj.(*unstructured.Unstructured)
-			klog.Infof("certificates delete %v", u.GetName())
-		},
-	})
 
 	// Watch for events related to Ingresses
 	c.sharedInformerFactory.Networking().V1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
