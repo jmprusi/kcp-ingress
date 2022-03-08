@@ -3,6 +3,7 @@ package ingress
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/rs/xid"
 
@@ -25,6 +26,9 @@ import (
 const (
 	clusterLabel = "kcp.dev/cluster"
 	ownedByLabel = "kcp.dev/owned-by"
+
+	hostGeneratedAnnotation = "kuadrant.dev/host.generated"
+	customHostReplaced      = "kuadrant.dev/custom-hosts.replaced"
 
 	manager                 = "kcp-ingress"
 	cascadeCleanupFinalizer = "kcp.dev/cascade-cleanup"
@@ -78,12 +82,6 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		return nil
 	}
 
-	// verifies custom hosts and if they are present and the flag is set to false
-	// the reconciliation will fail
-	if !*c.customHosts && validateCustomHosts(ingress, *c.domain) {
-		return fmt.Errorf("failed ingress '%s' reconciliation due to custom hosts", ingress.Name)
-	}
-
 	AddFinalizer(ingress, cascadeCleanupFinalizer)
 	if ingress.Annotations == nil || ingress.Annotations[cluster.ANNOTATION_HCG_HOST] == "" {
 		// Let's assign it a global hostname if any
@@ -94,6 +92,15 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 			return err
 		}
 		ingress = i
+	}
+
+	// if custom hosts are not enabled all the hosts in the ingress
+	// will be replaced to the generated host
+	if !*c.customHostsEnabled {
+		err := c.replaceCustomHosts(ctx, ingress)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Get the current leaves
@@ -534,4 +541,27 @@ func removeFinalizer(ingress *networkingv1.Ingress, finalizer string) {
 func ingressKey(ingress *networkingv1.Ingress) interface{} {
 	key, _ := cache.MetaNamespaceKeyFunc(ingress)
 	return cache.ExplicitKey(key)
+}
+
+func (c *Controller) replaceCustomHosts(ctx context.Context, ingress *networkingv1.Ingress) error {
+	generatedHost := ingress.Annotations[hostGeneratedAnnotation]
+	hosts := []interface{}{}
+	for i, rule := range ingress.Spec.Rules {
+		if rule.Host != generatedHost {
+			ingress.Spec.Rules[i].Host = generatedHost
+			hosts = append(hosts, rule.Host)
+		}
+	}
+
+	//TODO: TLS
+
+	if len(hosts) > 0 {
+		ingress.Annotations[customHostReplaced] = fmt.Sprintf(" replaced custom hosts ("+strings.Repeat("%s ", len(hosts))+") to the glbc host due to custom host policy not being allowed",
+			hosts...)
+		if _, err := c.kubeClient.Cluster(ingress.ClusterName).NetworkingV1().Ingresses(ingress.Namespace).Update(ctx, ingress, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
