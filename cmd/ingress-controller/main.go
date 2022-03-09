@@ -10,8 +10,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
-	envoyserver "knative.dev/net-kourier/pkg/envoy/server"
-
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 	"github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/informers/externalversions"
 	"github.com/kuadrant/kcp-glbc/pkg/reconciler/dns"
@@ -28,10 +26,6 @@ var kubecontext = flag.String("context", "", "Context to use in the Kubeconfig f
 
 var domain = flag.String("domain", "hcpapps.net", "The domain to use to expose ingresses")
 var dnsProvider = flag.String("dns-provider", "aws", "The DNS provider being used [aws, fake]")
-
-var envoyEnableXDS = flag.Bool("envoyxds", false, "Start an Envoy control plane")
-var envoyXDSPort = flag.Uint("envoyxds-port", 18000, "Envoy control plane port")
-var envoyListenPort = flag.Uint("envoy-listener-port", 80, "Envoy default listener port")
 
 func main() {
 	flag.Parse()
@@ -67,10 +61,6 @@ func main() {
 		DnsRecordClient:       dnsRecordClient,
 		SharedInformerFactory: kubeInformerFactory,
 		Domain:                domain,
-	}
-	if *envoyEnableXDS {
-		controllerConfig.EnvoyXDS = envoyserver.NewXdsServer(*envoyXDSPort, nil)
-		controllerConfig.EnvoyListenPort = envoyListenPort
 	}
 	ingressController := ingress.NewController(controllerConfig)
 

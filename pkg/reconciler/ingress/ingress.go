@@ -22,7 +22,6 @@ import (
 	"k8s.io/utils/pointer"
 
 	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
-	"github.com/kuadrant/kcp-glbc/pkg/envoy"
 )
 
 const (
@@ -193,21 +192,6 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 	for _, o := range others {
 		// Should the root Ingress status be updated only once the DNS record is successfully created / updated?
 		rootIngress.Status.LoadBalancer.Ingress = append(rootIngress.Status.LoadBalancer.Ingress, o.Status.LoadBalancer.Ingress...)
-	}
-
-	// If the envoy control plane is enabled, we update the cache and generate and send to envoy a new snapshot.
-	if c.envoyXDS != nil {
-		c.cache.UpdateIngress(*rootIngress)
-		err = c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
-		if err != nil {
-			return err
-		}
-
-		statusHost := generateStatusHost(c.domain, rootIngress)
-		// Now overwrite the Status of the rootIngress with our desired LB
-		rootIngress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{
-			Hostname: statusHost,
-		}}
 	}
 
 	// Update the root Ingress status with our desired LB.
