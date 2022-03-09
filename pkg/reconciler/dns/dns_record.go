@@ -13,7 +13,7 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/klog/v2"
 
-	"github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
+	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
 	"github.com/kuadrant/kcp-glbc/pkg/util/slice"
 )
 
@@ -53,6 +53,7 @@ func (c *Controller) reconcile(ctx context.Context, dnsRecord *v1.DNSRecord) err
 			return err
 		}
 	}
+
 	return nil
 }
 

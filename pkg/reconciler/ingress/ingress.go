@@ -19,13 +19,12 @@ import (
 	"k8s.io/utils/pointer"
 
 	v1 "github.com/kuadrant/kcp-glbc/pkg/apis/kuadrant/v1"
+	"github.com/kuadrant/kcp-glbc/pkg/cluster"
 )
 
 const (
 	clusterLabel = "kcp.dev/cluster"
 	ownedByLabel = "kcp.dev/owned-by"
-
-	hostGeneratedAnnotation = "kuadrant.dev/host.generated"
 
 	manager                 = "kcp-ingress"
 	cascadeCleanupFinalizer = "kcp.dev/cascade-cleanup"
@@ -49,10 +48,22 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 			if err != nil {
 				return err
 			}
+			// delete copied leaf secret
+			host := ingress.Annotations[cluster.ANNOTATION_HCG_HOST]
+			leafSecretName := getTLSSecretName(host, leaf)
+			if leafSecretName != "" {
+				if err := c.kubeClient.Cluster(leaf.ClusterName).CoreV1().Secrets(leaf.Namespace).Delete(ctx, leafSecretName, metav1.DeleteOptions{}); err != nil {
+					return err
+				}
+			}
 		}
 		// delete DNSRecord
 		err = c.dnsRecordClient.Cluster(ingress.ClusterName).KuadrantV1().DNSRecords(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
 		if err != nil && !errors.IsNotFound(err) {
+			return err
+		}
+		// delete any certificates
+		if err := c.ensureCertificate(ctx, ingress); err != nil {
 			return err
 		}
 		// all leaves removed, remove finalizer
@@ -68,10 +79,10 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 	}
 
 	AddFinalizer(ingress, cascadeCleanupFinalizer)
-	if ingress.Annotations == nil || ingress.Annotations[hostGeneratedAnnotation] == "" {
+	if ingress.Annotations == nil || ingress.Annotations[cluster.ANNOTATION_HCG_HOST] == "" {
 		// Let's assign it a global hostname if any
 		generatedHost := fmt.Sprintf("%s.%s", xid.New(), *c.domain)
-		patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, hostGeneratedAnnotation, generatedHost)
+		patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, cluster.ANNOTATION_HCG_HOST, generatedHost)
 		i, err := c.patchIngress(ctx, ingress, []byte(patch))
 		if err != nil {
 			return err
@@ -86,6 +97,14 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 	}
 	currentLeaves, err := c.lister.List(sel)
 	if err != nil {
+		return err
+	}
+	// setup DNS
+	if err := c.ensureDNS(ctx, ingress); err != nil {
+		return err
+	}
+	// setup certificates
+	if err := c.ensureCertificate(ctx, ingress); err != nil {
 		return err
 	}
 
@@ -107,6 +126,14 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 	// TODO(jmprusi): ugly. fix. use indexer, etc.
 	// Create and/or update the desired leaves
 	for _, leaf := range desiredLeaves {
+		// before we create if tls is enabled we need to wait for the tls secret to be present
+		if c.tlsEnabled {
+			// copy root tls secret
+			klog.Info("TLS is enabled copy tls secret for leaf ingress ", leaf.Name)
+			if err := c.copyRootTLSSecretForLeafs(ctx, ingress, leaf); err != nil {
+				return err
+			}
+		}
 		if _, err := c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Create(ctx, leaf, metav1.CreateOptions{}); err != nil {
 			if errors.IsAlreadyExists(err) {
 				existingLeaf, err := c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Get(ctx, leaf.Name, metav1.GetOptions{})
@@ -127,14 +154,106 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		}
 	}
 
-	// Reconcile the DNSRecord for the root Ingress
+	return nil
+}
+
+// ensureCertificate creates a certificate request for the root ingress into the control cluster
+func (c *Controller) ensureCertificate(ctx context.Context, rootIngress *networkingv1.Ingress) error {
+	if !c.tlsEnabled {
+		klog.Info("tls support not enabled. not creating certificates")
+		return nil
+	}
+	controlClusterContext, err := cluster.NewControlObjectMapper(rootIngress)
+	if err != nil {
+		return err
+	}
+	if rootIngress.DeletionTimestamp != nil && !rootIngress.DeletionTimestamp.IsZero() {
+		if err := c.certProvider.Delete(ctx, controlClusterContext); err != nil {
+			return err
+		}
+		return nil
+	}
+	err = c.certProvider.Create(ctx, controlClusterContext)
+	if err != nil && !errors.IsAlreadyExists(err) {
+		return err
+	}
+
+	klog.Info("Patching Ingress With TLS ", rootIngress.Name)
+	patch := fmt.Sprintf(`{"spec":{"tls":[{"hosts":[%q],"secretName":%q}]}}`, controlClusterContext.Host(), controlClusterContext.Name())
+	if _, err := c.patchIngress(ctx, rootIngress, []byte(patch)); err != nil {
+		klog.Info("failed to patch ingress *** ", err)
+		return err
+	}
+
+	return nil
+}
+
+func getTLSSecretName(host string, ingress *networkingv1.Ingress) string {
+	for _, tls := range ingress.Spec.TLS {
+		for _, tlsHost := range tls.Hosts {
+			if tlsHost == host {
+				return tls.SecretName
+			}
+		}
+	}
+	return ""
+}
+
+func (c *Controller) copyRootTLSSecretForLeafs(ctx context.Context, root *networkingv1.Ingress, leaf *networkingv1.Ingress) error {
+	host := root.Annotations[cluster.ANNOTATION_HCG_HOST]
+	if host == "" {
+		return fmt.Errorf("no host set yet cannot set up TLS")
+	}
+	var rootSecretName = getTLSSecretName(host, root)
+	var leafSecretName = getTLSSecretName(host, leaf)
+
+	if leafSecretName == "" || rootSecretName == "" {
+		return fmt.Errorf("cannot copy secrets yet as secrets names not present")
+	}
+	secretClient := c.kubeClient.Cluster(root.ClusterName).CoreV1().Secrets(root.Namespace)
+	// get the root secret
+	rootSecret, err := secretClient.Get(ctx, rootSecretName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	leafSecret := rootSecret.DeepCopy()
+	leafSecret.Name = leafSecretName
+	leafSecret.Labels = map[string]string{}
+	leafSecret.Labels[clusterLabel] = leaf.Labels[clusterLabel]
+	leafSecret.Labels[ownedByLabel] = root.Name
+
+	// Cleanup finalizers
+	leafSecret.Finalizers = []string{}
+	// Cleanup owner references
+	leafSecret.OwnerReferences = []metav1.OwnerReference{}
+	leafSecret.SetResourceVersion("")
+
+	_, err = secretClient.Create(ctx, leafSecret, metav1.CreateOptions{})
+	if err != nil && errors.IsAlreadyExists(err) {
+		ls, err := secretClient.Get(ctx, leafSecretName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		ls.Data = leafSecret.Data
+		if _, err := secretClient.Update(ctx, ls, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Controller) ensureDNS(ctx context.Context, ingress *networkingv1.Ingress) error {
 	if len(ingress.Status.LoadBalancer.Ingress) > 0 {
 		for _, lbs := range ingress.Status.LoadBalancer.Ingress {
 			c.hostsWatcher.StartWatching(ctx, ingressKey(ingress), lbs.Hostname)
 		}
 
 		// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
-		record, err := c.getDNSRecord(ctx, ingress.Annotations[hostGeneratedAnnotation], ingress)
+		record, err := c.getDNSRecord(ctx, ingress.Annotations[cluster.ANNOTATION_HCG_HOST], ingress)
 		if err != nil {
 			return err
 		}
@@ -158,7 +277,6 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -308,9 +426,21 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 		// Cleanup owner references
 		vd.OwnerReferences = []metav1.OwnerReference{}
 		vd.SetResourceVersion("")
-
-		if hostname, ok := root.Annotations[hostGeneratedAnnotation]; ok {
+		if hostname, ok := root.Annotations[cluster.ANNOTATION_HCG_HOST]; ok {
 			// Duplicate the existing rules for the global hostname
+			if c.tlsEnabled {
+				klog.Info("tls is enabled updating leaf ingress with secret name")
+				for tlsIndex, tls := range root.Spec.TLS {
+					// find the RH host
+					for _, th := range tls.Hosts {
+						if hostname == th {
+							// set the tls section on the leaf at the right index. The secret will be created when the leaf is created
+							vd.Spec.TLS[tlsIndex].SecretName = fmt.Sprintf("%s-tls", vd.Name)
+						}
+					}
+
+				}
+			}
 			globalRules := make([]networkingv1.IngressRule, len(vd.Spec.Rules))
 			for i, rule := range vd.Spec.Rules {
 				r := rule.DeepCopy()
@@ -322,7 +452,7 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 
 		desiredLeaves = append(desiredLeaves, vd)
 	}
-
+	klog.Infof("desired leaves generated %v ", len(desiredLeaves))
 	return desiredLeaves, nil
 }
 

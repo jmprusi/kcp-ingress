@@ -3,17 +3,16 @@ module github.com/kuadrant/kcp-glbc
 go 1.16
 
 require (
-	github.com/aws/aws-sdk-go v1.38.49
+	github.com/aws/aws-sdk-go v1.40.21
 	github.com/google/go-cmp v0.5.6
-	github.com/imdario/mergo v0.3.9 // indirect
-	github.com/miekg/dns v1.1.17
+	github.com/jetstack/cert-manager v1.7.1
+	github.com/miekg/dns v1.1.34
 	github.com/rs/xid v1.3.0
-	google.golang.org/grpc v1.42.0 // indirect
-	k8s.io/api v0.22.2
-	k8s.io/apimachinery v0.22.2
-	k8s.io/apiserver v0.0.0
-	k8s.io/client-go v0.21.4
-	k8s.io/code-generator v0.0.0-00010101000000-000000000000
+	k8s.io/api v0.23.1
+	k8s.io/apimachinery v0.23.1
+	k8s.io/apiserver v0.23.1
+	k8s.io/client-go v0.23.1
+	k8s.io/code-generator v0.23.1
 	k8s.io/klog/v2 v2.30.0
 	k8s.io/utils v0.0.0-20211116205334-6203023598ed
 )

@@ -125,7 +125,7 @@ func NewControlObjectMapper(obj runtime.Object) (ObjectMapper, error) {
 	}
 	name, err := ac.Name(obj)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("expected object to have a name "))
+		return nil, fmt.Errorf("expected object to have a name ")
 	}
 	ctx.name = name
 	v, ok := annotations[ANNOTATION_HCG_HOST]

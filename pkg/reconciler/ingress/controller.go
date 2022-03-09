@@ -11,8 +11,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	networkingv1lister "k8s.io/client-go/listers/networking/v1"
@@ -22,6 +20,7 @@ import (
 
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 	"github.com/kuadrant/kcp-glbc/pkg/net"
+	"github.com/kuadrant/kcp-glbc/pkg/tls"
 )
 
 const controllerName = "kcp-glbc-ingress"
@@ -40,15 +39,15 @@ func NewController(config *ControllerConfig) *Controller {
 	hostResolver = net.NewSafeHostResolver(hostResolver)
 
 	c := &Controller{
-		queue:                     queue,
-		kubeClient:                config.KubeClient,
-		glbcKubeClient:            config.GLBCKubeClient,
-		sharedInformerFactory:     config.SharedInformerFactory,
-		glbcSharedInformerFactory: config.GLBCSharedInformerFactory,
-		dnsRecordClient:           config.DnsRecordClient,
-		domain:                    config.Domain,
-		tracker:                   newTracker(),
-		hostResolver:              hostResolver,
+		queue:                 queue,
+		kubeClient:            config.KubeClient,
+		certProvider:          config.CertProvider,
+		sharedInformerFactory: config.SharedInformerFactory,
+		dnsRecordClient:       config.DnsRecordClient,
+		domain:                config.Domain,
+		tracker:               newTracker(),
+		tlsEnabled:            config.TLSEnabled,
+		hostResolver:          hostResolver,
 		hostsWatcher: net.NewHostsWatcher(
 			hostResolver,
 			net.DefaultInterval,
@@ -76,28 +75,28 @@ func NewController(config *ControllerConfig) *Controller {
 }
 
 type ControllerConfig struct {
-	KubeClient                kubernetes.ClusterInterface
-	GLBCKubeClient            dynamic.Interface
-	DnsRecordClient           kuadrantv1.ClusterInterface
-	SharedInformerFactory     informers.SharedInformerFactory
-	GLBCSharedInformerFactory dynamicinformer.DynamicSharedInformerFactory
-	Domain                    *string
-	HostResolver              net.HostResolver
+	KubeClient            kubernetes.ClusterInterface
+	DnsRecordClient       kuadrantv1.ClusterInterface
+	SharedInformerFactory informers.SharedInformerFactory
+	Domain                *string
+	TLSEnabled            bool
+	CertProvider          tls.Provider
+	HostResolver          net.HostResolver
 }
 
 type Controller struct {
-	queue                     workqueue.RateLimitingInterface
-	kubeClient                kubernetes.ClusterInterface
-	glbcKubeClient            dynamic.Interface
-	sharedInformerFactory     informers.SharedInformerFactory
-	glbcSharedInformerFactory dynamicinformer.DynamicSharedInformerFactory
-	dnsRecordClient           kuadrantv1.ClusterInterface
-	indexer                   cache.Indexer
-	lister                    networkingv1lister.IngressLister
-	domain                    *string
-	tracker                   tracker
-	hostResolver              net.HostResolver
-	hostsWatcher              *net.HostsWatcher
+	queue                 workqueue.RateLimitingInterface
+	kubeClient            kubernetes.ClusterInterface
+	sharedInformerFactory informers.SharedInformerFactory
+	dnsRecordClient       kuadrantv1.ClusterInterface
+	indexer               cache.Indexer
+	lister                networkingv1lister.IngressLister
+	certProvider          tls.Provider
+	domain                *string
+	tlsEnabled            bool
+	tracker               tracker
+	hostResolver          net.HostResolver
+	hostsWatcher          *net.HostsWatcher
 }
 
 func (c *Controller) enqueue(obj interface{}) {
