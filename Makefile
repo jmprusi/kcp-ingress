@@ -53,18 +53,6 @@ kcp:
 local-setup: clean build kind kcp
 	./utils/local-setup.sh -c ${NUM_CLUSTERS}
 
-.PHONY: aws-setup
-aws-setup: clean kcp
-	./utils/aws-setup.sh --deploy
-
-.PHONY: aws-setup-clean
-aws-setup-clean:
-	./utils/aws-setup.sh --clean
-
-codegen:
-	./hack/update-codegen.sh
-.PHONY: codegen
-
 .PHONY: clean
 clean:
 	-rm -rf ./.kcp

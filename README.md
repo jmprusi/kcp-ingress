@@ -1,4 +1,4 @@
-# KCP Ingress
+# KCP Global Load Balancer
 
 PoC related to <https://github.com/kcp-dev/kcp/issues/75>
 
@@ -50,24 +50,6 @@ Recreate them:
 KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-1.yaml
 KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-2.yaml
 ```
-
-## Envoy control plane
-
-kcp-ingress contains a small control-plane for Envoy for local development purposes. It reads Ingress V1 resources and creates the Envoy configuration. It is not intended to be used in production, and doesn't cover all the features of Ingress v1.
-
-To enable it, run:
-
-```bash
-./bin/ingress-controller -kubeconfig .kcp/admin.kubeconfig -envoyxds
-```
-
-Then you can run the Envoy server using the bootstrap config provided:
-
-```bash
-envoy -c utils/envoy/bootstrap.yaml
-```
-
-By default, the Envoy server will listen on port 80, and that can be controlled with the `-envoy-listener-port` flag. 
 
 ## Overall diagram
 

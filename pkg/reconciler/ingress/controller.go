@@ -17,10 +17,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	envoyserver "knative.dev/net-kourier/pkg/envoy/server"
-
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
-	"github.com/kuadrant/kcp-glbc/pkg/envoy"
 )
 
 const controllerName = "kcp-glbc-ingress"
@@ -38,18 +35,6 @@ func NewController(config *ControllerConfig) *Controller {
 		dnsRecordClient:       config.DnsRecordClient,
 		domain:                config.Domain,
 		tracker:               newTracker(),
-	}
-
-	if config.EnvoyXDS != nil {
-		c.envoyXDS = config.EnvoyXDS
-		c.cache = envoy.NewCache(envoy.NewTranslator(config.EnvoyListenPort))
-
-		go func() {
-			err := c.envoyXDS.RunManagementServer()
-			if err != nil {
-				panic(err)
-			}
-		}()
 	}
 
 	// Watch for events related to Ingresses
@@ -75,9 +60,7 @@ type ControllerConfig struct {
 	KubeClient            kubernetes.ClusterInterface
 	DnsRecordClient       kuadrantv1.ClusterInterface
 	SharedInformerFactory informers.SharedInformerFactory
-	EnvoyXDS              *envoyserver.XdsServer
 	Domain                *string
-	EnvoyListenPort       *uint
 }
 
 type Controller struct {
@@ -87,9 +70,6 @@ type Controller struct {
 	dnsRecordClient       kuadrantv1.ClusterInterface
 	indexer               cache.Indexer
 	lister                networkingv1lister.IngressLister
-	envoyXDS              *envoyserver.XdsServer
-	envoyListenPort       *uint
-	cache                 *envoy.Cache
 	domain                *string
 	tracker               tracker
 }
@@ -168,12 +148,6 @@ func (c *Controller) process(ctx context.Context, key string) error {
 
 	if !exists {
 		klog.Infof("Object with key %q was deleted", key)
-		// If Envoy is enabled, delete the Ingress from the config cache.
-		if c.envoyXDS != nil {
-			// if EnvoyXDS is enabled, delete the Ingress from the cache and set the new snaphost.
-			c.cache.DeleteIngress(key)
-			c.envoyXDS.SetSnapshot(envoy.NodeID, c.cache.ToEnvoySnapshot())
-		}
 		// The ingress has been deleted, so we remove any ingress to service tracking.
 		c.tracker.deleteIngress(key)
 		return nil
