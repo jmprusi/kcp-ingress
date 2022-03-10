@@ -37,7 +37,6 @@ trap cleanup EXIT 1 2 3 6 15
 
 cleanup() {
   echo "Killing KCP"
-  kill "$CONTROLLER_2"
   kill "$KCP_PID"
 }
 
@@ -152,9 +151,6 @@ kubectl apply -f ./tmp/
 
 echo "Registering HCG APIs"
 kubectl apply -f ./config/crd
-
-./bin/deployment-splitter --kubeconfig=.kcp/admin.kubeconfig >> ${KCP_LOG_FILE} 2>&1 &
-CONTROLLER_2=$!
 
 echo ""
 echo "KCP PID          : ${KCP_PID}"
