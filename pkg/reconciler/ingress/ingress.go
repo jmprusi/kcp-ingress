@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
-	"net"
 	"strings"
 
 	"github.com/rs/xid"
@@ -43,6 +42,9 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 			return err
 		}
 		currentLeaves, err := c.lister.List(sel)
+		if err != nil {
+			return err
+		}
 		klog.Infof("found %v leaf ingresses", len(currentLeaves))
 		for _, leaf := range currentLeaves {
 			err = c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Delete(ctx, leaf.Name, metav1.DeleteOptions{})
@@ -58,6 +60,11 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		// all leaves removed, remove finalizer
 		klog.Infof("'%v' ingress leaves cleaned up - removing finalizer", ingress.Name)
 		removeFinalizer(ingress, cascadeCleanupFinalizer)
+
+		c.hostsWatcher.StopWatching(ingressKey(ingress))
+		for _, leaf := range currentLeaves {
+			c.hostsWatcher.StopWatching(ingressKey(leaf))
+		}
 
 		return nil
 	}
@@ -122,8 +129,12 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 
 	// Reconcile the DNSRecord for the root Ingress
 	if len(ingress.Status.LoadBalancer.Ingress) > 0 {
+		for _, lbs := range ingress.Status.LoadBalancer.Ingress {
+			c.hostsWatcher.StartWatching(ctx, ingressKey(ingress), lbs.Hostname)
+		}
+
 		// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
-		record, err := getDNSRecord(ingress.Annotations[hostGeneratedAnnotation], ingress)
+		record, err := c.getDNSRecord(ctx, ingress.Annotations[hostGeneratedAnnotation], ingress)
 		if err != nil {
 			return err
 		}
@@ -211,17 +222,17 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 }
 
 // TODO may want to move this to its own package in the future
-func getDNSRecord(hostname string, ingress *networkingv1.Ingress) (*v1.DNSRecord, error) {
+func (c *Controller) getDNSRecord(ctx context.Context, hostname string, ingress *networkingv1.Ingress) (*v1.DNSRecord, error) {
 	var targets []string
 	for _, lbs := range ingress.Status.LoadBalancer.Ingress {
 		if lbs.Hostname != "" {
 			// TODO: once we are adding tests abstract to interface
-			ips, err := net.LookupIP(lbs.Hostname)
+			ips, err := c.hostResolver.LookupIPAddr(ctx, lbs.Hostname)
 			if err != nil {
 				return nil, err
 			}
 			for _, ip := range ips {
-				targets = append(targets, ip.String())
+				targets = append(targets, ip.IP.String())
 			}
 		}
 		if lbs.IP != "" {
@@ -408,4 +419,9 @@ func removeFinalizer(ingress *networkingv1.Ingress, finalizer string) {
 			return
 		}
 	}
+}
+
+func ingressKey(ingress *networkingv1.Ingress) interface{} {
+	key, _ := cache.MetaNamespaceKeyFunc(ingress)
+	return cache.ExplicitKey(key)
 }

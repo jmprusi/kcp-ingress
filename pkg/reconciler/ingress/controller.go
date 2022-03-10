@@ -2,6 +2,7 @@ package ingress
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/klog/v2"
 
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
+	"github.com/kuadrant/kcp-glbc/pkg/net"
 )
 
 const controllerName = "kcp-glbc-ingress"
@@ -28,6 +30,13 @@ const controllerName = "kcp-glbc-ingress"
 func NewController(config *ControllerConfig) *Controller {
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 
+	hostResolver := config.HostResolver
+	switch impl := hostResolver.(type) {
+	case *net.ConfigMapHostResolver:
+		impl.Client = config.KubeClient.Cluster("admin")
+	}
+	hostResolver = net.NewSafeHostResolver(hostResolver)
+
 	c := &Controller{
 		queue:                 queue,
 		kubeClient:            config.KubeClient,
@@ -35,7 +44,13 @@ func NewController(config *ControllerConfig) *Controller {
 		dnsRecordClient:       config.DnsRecordClient,
 		domain:                config.Domain,
 		tracker:               newTracker(),
+		hostResolver:          hostResolver,
+		hostsWatcher: net.NewHostsWatcher(
+			hostResolver,
+			net.DefaultInterval,
+		),
 	}
+	c.hostsWatcher.OnChange = c.synchronisedEnque()
 
 	// Watch for events related to Ingresses
 	c.sharedInformerFactory.Networking().V1().Ingresses().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -61,6 +76,7 @@ type ControllerConfig struct {
 	DnsRecordClient       kuadrantv1.ClusterInterface
 	SharedInformerFactory informers.SharedInformerFactory
 	Domain                *string
+	HostResolver          net.HostResolver
 }
 
 type Controller struct {
@@ -72,6 +88,8 @@ type Controller struct {
 	lister                networkingv1lister.IngressLister
 	domain                *string
 	tracker               tracker
+	hostResolver          net.HostResolver
+	hostsWatcher          *net.HostsWatcher
 }
 
 func (c *Controller) enqueue(obj interface{}) {
@@ -192,5 +210,16 @@ func (c *Controller) ingressesFromService(obj interface{}) {
 	for _, ingress := range ingresses.List() {
 		klog.Infof("tracked service %q triggered Ingress %q reconciliation", service.Name, ingress)
 		c.queue.Add(ingress)
+	}
+}
+
+// synchronisedEnque returns a function to be passed to the host watcher that
+// enqueues the affected object to be reconcilled by c, in a synchronized fashion
+func (c *Controller) synchronisedEnque() func(obj interface{}) {
+	var mu sync.Mutex
+	return func(obj interface{}) {
+		mu.Lock()
+		defer mu.Unlock()
+		c.enqueue(obj)
 	}
 }
