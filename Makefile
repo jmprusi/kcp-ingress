@@ -1,40 +1,84 @@
-all: vendor build
-.PHONY: all
 
-SHELL := /bin/bash
+SHELL := /usr/bin/env bash
+
 NUM_CLUSTERS := 2
 KCP_BRANCH := release-prototype-2
-# go-get-tool will 'go get' any package $2 and install it to $1.
-# backing up and recovering the go.mod/go.sum as go install doesnt work
-# with project that use replacement directives, no time for a nicer solution.
-PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
-define go-get-tool
-@[ -f $(1) ] || { \
-set -e ;\
-echo "Downloading $(2)" ;\
-mkdir -p $(PROJECT_DIR)/tmp ;\
-cp $(PROJECT_DIR)/{go.mod,go.sum} $(PROJECT_DIR)/tmp ;\
-GOBIN=$(PROJECT_DIR)/bin go get $(2) ;\
-cp $(PROJECT_DIR)/tmp/{go.mod,go.sum} $(PROJECT_DIR)/ ;\
-}
-endef
 
-build:
-	go build -o bin ./cmd/...
-.PHONY: build
+.PHONY: all
+all: build
 
-vendor:
+##@ General
+
+.PHONY: help
+help: ## Display this help.
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+##@ Development
+
+.PHONY: clean
+clean: ## Clean up temporary files.
+	-rm -rf ./.kcp
+	-rm -f ./bin/*
+	-rm -rf ./tmp
+
+generate: generate-deepcopy generate-crd generate-client ## Generate code containing DeepCopy method implementations, CustomResourceDefinition objects and Clients.
+
+generate-deepcopy: controller-gen
+	cd pkg/apis/kuadrant && $(CONTROLLER_GEN) paths="./..." object
+
+generate-crd: controller-gen
+	cd pkg/apis/kuadrant && $(CONTROLLER_GEN) crd paths=./... output:crd:artifacts:config=../../../config/crd output:crd:dir=../../../config/crd crd:crdVersions=v1 && rm -rf ./config
+
+generate-client:
+	./scripts/gen_client.sh
+
+vendor: ## Vendor the dependencies.
 	go mod tidy
 	go mod vendor
 .PHONY: vendor
 
-KIND = $(shell pwd)/bin/kind
-kind:
-	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
+.PHONY: fmt
+fmt: ## Run go fmt against code.
+	go fmt ./...
 
-# Not ideal, fix when possible.
+.PHONY: vet
+vet: ## Run go vet against code.
+	go vet ./...
+
+lint: ## Run golangci-lint against code.
+	golangci-lint run ./...
+.PHONY: lint
+
+.PHONY: test
+test: generate ## Run tests.
+	#ToDo Implement `test` target
+
+##@ CI
+
+#Note, these targets are expected to run in a clean CI enviornment.
+
+.PHONY: verify-generate
+verify-generate: generate ## Verify generate update.
+	git diff --exit-code
+
+##@ Build
+
+build: ## Build the project.
+	go build -o bin ./cmd/...
+.PHONY: build
+
+.PHONY: docker-build
+docker-build: ## Build docker image.
+	#ToDo Implement `docker-build` target
+
+##@ Deployment
+
+.PHONY: local-setup
+local-setup: clean build kind kcp ## Setup kcp locally using kind.
+	./utils/local-setup.sh -c ${NUM_CLUSTERS}
+
 KCP = $(shell pwd)/bin/kcp
-kcp:
+kcp: ## Download kcp locally.
 	rm -rf ./tmp/kcp
 	git clone --depth=1 --branch ${KCP_BRANCH} https://github.com/kuadrant/kcp ./tmp/kcp
 	cd ./tmp/kcp && make
@@ -49,30 +93,13 @@ kcp:
 	cp ./tmp/kcp/bin/virtual-workspaces $(shell pwd)/bin
 	rm -rf ./tmp/kcp
 
-.PHONY: local-setup
-local-setup: clean build kind kcp
-	./utils/local-setup.sh -c ${NUM_CLUSTERS}
-
-.PHONY: clean
-clean:
-	-rm -rf ./.kcp
-	-rm -f ./bin/*
-	-rm -rf ./tmp
-
-generate: generate-deepcopy generate-crd generate-client
-
-generate-deepcopy: controller-gen
-	cd pkg/apis/kuadrant && $(CONTROLLER_GEN) paths="./..." object
-
-generate-crd: controller-gen
-	cd pkg/apis/kuadrant && $(CONTROLLER_GEN) crd paths=./... output:crd:artifacts:config=../../../config/crd output:crd:dir=../../../config/crd crd:crdVersions=v1 && rm -rf ./config
-
-generate-client:
-	./scripts/gen_client.sh
-
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
 controller-gen: ## Download controller-gen locally if necessary.
 	$(call go-get-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@v0.8.0)
+
+KIND = $(shell pwd)/bin/kind
+kind: ## Download kind locally if necessary.
+	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
 
 # go-get-tool will 'go get' any package $2 and install it to $1.
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
