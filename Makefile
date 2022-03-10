@@ -3,7 +3,6 @@ all: vendor build
 
 SHELL := /bin/bash
 NUM_CLUSTERS := 2
-KCP_BRANCH := release-prototype-2
 # go-get-tool will 'go get' any package $2 and install it to $1.
 # backing up and recovering the go.mod/go.sum as go install doesnt work
 # with project that use replacement directives, no time for a nicer solution.
@@ -32,25 +31,8 @@ KIND = $(shell pwd)/bin/kind
 kind:
 	$(call go-get-tool,$(KIND),sigs.k8s.io/kind@v0.11.1)
 
-# Not ideal, fix when possible.
-KCP = $(shell pwd)/bin/kcp
-kcp:
-	rm -rf ./tmp/kcp
-	git clone --depth=1 --branch ${KCP_BRANCH} https://github.com/kuadrant/kcp ./tmp/kcp
-	cd ./tmp/kcp && make
-	cp ./tmp/kcp/bin/cluster-controller $(shell pwd)/bin
-	cp ./tmp/kcp/bin/compat $(shell pwd)/bin
-	cp ./tmp/kcp/bin/crd-puller $(shell pwd)/bin
-	cp ./tmp/kcp/bin/deployment-splitter $(shell pwd)/bin
-	cp ./tmp/kcp/bin/kcp $(shell pwd)/bin
-	cp ./tmp/kcp/bin/kubectl-kcp $(shell pwd)/bin
-	cp ./tmp/kcp/bin/shard-proxy $(shell pwd)/bin
-	cp ./tmp/kcp/bin/syncer $(shell pwd)/bin
-	cp ./tmp/kcp/bin/virtual-workspaces $(shell pwd)/bin
-	rm -rf ./tmp/kcp
-
 .PHONY: local-setup
-local-setup: clean build kind kcp
+local-setup: clean build kind
 	./utils/local-setup.sh -c ${NUM_CLUSTERS}
 
 .PHONY: clean
