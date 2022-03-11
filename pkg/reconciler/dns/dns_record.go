@@ -220,9 +220,5 @@ func dnsZoneStatusSlicesEqual(a, b []v1.DNSZoneStatus) bool {
 			return a.Type < b.Type
 		}),
 	}
-	if !cmp.Equal(a, b, conditionCmpOpts...) {
-		return false
-	}
-
-	return true
+	return cmp.Equal(a, b, conditionCmpOpts...)
 }

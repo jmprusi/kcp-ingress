@@ -214,7 +214,7 @@ func (c *Controller) ingressesFromService(obj interface{}) {
 }
 
 // synchronisedEnque returns a function to be passed to the host watcher that
-// enqueues the affected object to be reconcilled by c, in a synchronized fashion
+// enqueues the affected object to be reconciled by c, in a synchronized fashion
 func (c *Controller) synchronisedEnque() func(obj interface{}) {
 	var mu sync.Mutex
 	return func(obj interface{}) {
