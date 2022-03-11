@@ -3,8 +3,6 @@ package ingress
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
-	"strings"
 
 	"github.com/rs/xid"
 
@@ -74,9 +72,11 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		// Let's assign it a global hostname if any
 		generatedHost := fmt.Sprintf("%s.%s", xid.New(), *c.domain)
 		patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, hostGeneratedAnnotation, generatedHost)
-		if err := c.patchIngress(ctx, ingress, []byte(patch)); err != nil {
+		i, err := c.patchIngress(ctx, ingress, []byte(patch))
+		if err != nil {
 			return err
 		}
+		ingress = i
 	}
 
 	// Get the current leaves
@@ -326,30 +326,6 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 	return desiredLeaves, nil
 }
 
-func hashString(s string) string {
-	h := fnv.New32a()
-	h.Write([]byte(s))
-	return fmt.Sprint(h.Sum32())
-}
-
-func generateStatusHost(domain *string, ingress *networkingv1.Ingress) string {
-	// TODO(jmprusi): using "contains" is a bad idea as it could be abused by crafting a malicious hostname, but for a PoC it should be good enough?
-	allRulesAreDomain := true
-	for _, rule := range ingress.Spec.Rules {
-		if !strings.Contains(rule.Host, *domain) {
-			allRulesAreDomain = false
-			break
-		}
-	}
-
-	// TODO(jmprusi): Hardcoded to the first one...
-	if allRulesAreDomain {
-		return ingress.Spec.Rules[0].Host
-	}
-
-	return hashString(ingress.Name+ingress.Namespace+ingress.ClusterName) + "." + *domain
-}
-
 // getServices will parse the ingress object and return a list of the services.
 func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingress) ([]*corev1.Service, error) {
 	var services []*corev1.Service
@@ -366,14 +342,9 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 	return services, nil
 }
 
-func (c *Controller) patchIngress(ctx context.Context, ingress *networkingv1.Ingress, data []byte) error {
-	i, err := c.kubeClient.Cluster(ingress.ClusterName).NetworkingV1().Ingresses(ingress.Namespace).
+func (c *Controller) patchIngress(ctx context.Context, ingress *networkingv1.Ingress, data []byte) (*networkingv1.Ingress, error) {
+	return c.kubeClient.Cluster(ingress.ClusterName).NetworkingV1().Ingresses(ingress.Namespace).
 		Patch(ctx, ingress.Name, types.MergePatchType, data, metav1.PatchOptions{FieldManager: manager})
-	if err != nil {
-		return err
-	}
-	ingress = i
-	return nil
 }
 
 func findNonDesiredLeaves(current, desired []*networkingv1.Ingress) []*networkingv1.Ingress {
