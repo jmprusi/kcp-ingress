@@ -20,6 +20,7 @@ import (
 
 	kuadrantv1 "github.com/kuadrant/kcp-glbc/pkg/client/kuadrant/clientset/versioned"
 	"github.com/kuadrant/kcp-glbc/pkg/net"
+	"github.com/kuadrant/kcp-glbc/pkg/tls"
 )
 
 const controllerName = "kcp-glbc-ingress"
@@ -40,10 +41,12 @@ func NewController(config *ControllerConfig) *Controller {
 	c := &Controller{
 		queue:                 queue,
 		kubeClient:            config.KubeClient,
+		certProvider:          config.CertProvider,
 		sharedInformerFactory: config.SharedInformerFactory,
 		dnsRecordClient:       config.DnsRecordClient,
 		domain:                config.Domain,
 		tracker:               newTracker(),
+		tlsEnabled:            config.TLSEnabled,
 		hostResolver:          hostResolver,
 		hostsWatcher: net.NewHostsWatcher(
 			hostResolver,
@@ -76,6 +79,8 @@ type ControllerConfig struct {
 	DnsRecordClient       kuadrantv1.ClusterInterface
 	SharedInformerFactory informers.SharedInformerFactory
 	Domain                *string
+	TLSEnabled            bool
+	CertProvider          tls.Provider
 	HostResolver          net.HostResolver
 }
 
@@ -86,7 +91,9 @@ type Controller struct {
 	dnsRecordClient       kuadrantv1.ClusterInterface
 	indexer               cache.Indexer
 	lister                networkingv1lister.IngressLister
+	certProvider          tls.Provider
 	domain                *string
+	tlsEnabled            bool
 	tracker               tracker
 	hostResolver          net.HostResolver
 	hostsWatcher          *net.HostsWatcher
