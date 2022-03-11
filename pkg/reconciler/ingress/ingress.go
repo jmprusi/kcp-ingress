@@ -129,8 +129,11 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 
 	// Reconcile the DNSRecord for the root Ingress
 	if len(ingress.Status.LoadBalancer.Ingress) > 0 {
+		// Start watching for address changes in the LBs hostnames
 		for _, lbs := range ingress.Status.LoadBalancer.Ingress {
-			c.hostsWatcher.StartWatching(ctx, ingressKey(ingress), lbs.Hostname)
+			if lbs.Hostname != "" {
+				c.hostsWatcher.StartWatching(ctx, ingressKey(ingress), lbs.Hostname)
+			}
 		}
 
 		// The ingress has been admitted, let's expose the local load-balancing point to the global LB.
