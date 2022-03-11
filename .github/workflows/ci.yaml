@@ -3,14 +3,24 @@ name: CI
 on:
   push:
     branches: ["main"]
+    paths-ignore:
+      - '**.adoc'
+      - '**.md'
+      - 'samples/**'
+      - 'LICENSE'
   pull_request:
     branches: ["main"]
+    paths-ignore:
+      - '**.adoc'
+      - '**.md'
+      - 'samples/**'
+      - 'LICENSE'
 
 jobs:
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-go@v2
@@ -18,12 +28,16 @@ jobs:
           go-version: v1.17
       - uses: golangci/golangci-lint-action@v2
         with:
+          version: v1.44.2
           only-new-issues: true
           args: --timeout=5m
 
   codegen:
     name: codegen
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [ ubuntu-20.04, macos-11 ]
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-go@v2
@@ -34,7 +48,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-go@v2
