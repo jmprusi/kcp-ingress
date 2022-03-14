@@ -83,7 +83,6 @@ type ControllerConfig struct {
 	TLSEnabled            bool
 	CertProvider          tls.Provider
 	HostResolver          net.HostResolver
-	EnvoyListenPort       *uint
 	CustomHostsEnabled    *bool
 }
 

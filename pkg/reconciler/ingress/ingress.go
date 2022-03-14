@@ -3,7 +3,6 @@ package ingress
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/rs/xid"
 
@@ -26,9 +25,6 @@ import (
 const (
 	clusterLabel = "kcp.dev/cluster"
 	ownedByLabel = "kcp.dev/owned-by"
-
-	hostGeneratedAnnotation = "kuadrant.dev/host.generated"
-	customHostReplaced      = "kuadrant.dev/custom-hosts.replaced"
 
 	manager                 = "kcp-ingress"
 	cascadeCleanupFinalizer = "kcp.dev/cascade-cleanup"
@@ -544,8 +540,8 @@ func ingressKey(ingress *networkingv1.Ingress) interface{} {
 }
 
 func (c *Controller) replaceCustomHosts(ctx context.Context, ingress *networkingv1.Ingress) error {
-	generatedHost := ingress.Annotations[hostGeneratedAnnotation]
-	hosts := []interface{}{}
+	generatedHost := ingress.Annotations[cluster.ANNOTATION_HCG_HOST]
+	hosts := []string{}
 	for i, rule := range ingress.Spec.Rules {
 		if rule.Host != generatedHost {
 			ingress.Spec.Rules[i].Host = generatedHost
@@ -553,15 +549,35 @@ func (c *Controller) replaceCustomHosts(ctx context.Context, ingress *networking
 		}
 	}
 
-	//TODO: TLS
+	// clean up replaced hosts from the tls list
+	removeHostsFromTLS(hosts, ingress)
 
 	if len(hosts) > 0 {
-		ingress.Annotations[customHostReplaced] = fmt.Sprintf(" replaced custom hosts ("+strings.Repeat("%s ", len(hosts))+") to the glbc host due to custom host policy not being allowed",
-			hosts...)
+		ingress.Annotations[cluster.ANNOTATION_HCG_CUSTOM_HOST_REPLACED] = fmt.Sprintf(" replaced custom hosts %v to the glbc host due to custom host policy not being allowed",
+			hosts)
 		if _, err := c.kubeClient.Cluster(ingress.ClusterName).NetworkingV1().Ingresses(ingress.Namespace).Update(ctx, ingress, metav1.UpdateOptions{}); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func removeHostsFromTLS(hostsToRemove []string, ingress *networkingv1.Ingress) {
+	for _, host := range hostsToRemove {
+		for i, tls := range ingress.Spec.TLS {
+			hosts := tls.Hosts
+			for j, ingressHost := range tls.Hosts {
+				if ingressHost == host {
+					hosts = append(hosts[:j], hosts[j+1:]...)
+				}
+			}
+			// if there are no hosts remaning remove the entry for tls
+			if len(hosts) == 0 {
+				ingress.Spec.TLS[i] = networkingv1.IngressTLS{}
+			} else {
+				ingress.Spec.TLS[i].Hosts = hosts
+			}
+		}
+	}
 }

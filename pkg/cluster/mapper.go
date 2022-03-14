@@ -9,12 +9,13 @@ import (
 )
 
 const (
-	LABEL_HCG_HOST           = "kuadrant.dev/hcg.host"
-	ANNOTATION_HCG_WORKSPACE = "kuadrant.dev/hcg.workspace"
-	ANNOTATION_HCG_NAMESPACE = "kuadrant.dev/hcg.namespace"
-	LABEL_HCG_MANAGED        = "kuadrant.dev/hcg.managed"
-	ANNOTATION_HCG_HOST      = "kuadrant.dev/host.generated"
-	LABEL_OWNED_BY           = "kcp.dev/owned-by"
+	LABEL_HCG_HOST                      = "kuadrant.dev/hcg.host"
+	ANNOTATION_HCG_WORKSPACE            = "kuadrant.dev/hcg.workspace"
+	ANNOTATION_HCG_NAMESPACE            = "kuadrant.dev/hcg.namespace"
+	LABEL_HCG_MANAGED                   = "kuadrant.dev/hcg.managed"
+	ANNOTATION_HCG_HOST                 = "kuadrant.dev/host.generated"
+	ANNOTATION_HCG_CUSTOM_HOST_REPLACED = "kuadrant.dev/custom-hosts.replaced"
+	LABEL_OWNED_BY                      = "kcp.dev/owned-by"
 )
 
 type context struct {
