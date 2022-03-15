@@ -51,6 +51,25 @@ KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-1.yaml
 KUBECONFIG=.kcp/admin.kubeconfig kubectl apply -f ./tmp/kcp-cluster-2.yaml
 ```
 
+### Add CRC cluster
+
+With a running local setup i.e. you have successfully executed `make local-setup`, you can run the following to create and add a CRC cluster:
+
+```bash
+./utils/local-setup-add-crc-cluster.sh
+```
+
+```bash
+$ kubectl get clusters -o wide
+NAME              LOCATION          READY   SYNCED API RESOURCES
+kcp-cluster-1     kcp-cluster-1     True    ["deployments.apps","ingresses.networking.k8s.io","secrets","services"]
+kcp-cluster-2     kcp-cluster-2     True    ["deployments.apps","ingresses.networking.k8s.io","secrets","services"]
+kcp-cluster-crc   kcp-cluster-crc   True    ["deployments.apps","ingresses.networking.k8s.io","secrets","services"]
+```
+
+You must have crc installed(https://crc.dev/crc/), and have your openshift pull secret(https://cloud.redhat.com/openshift/create/local) stored locally in `~/pull-secret`. 
+Please check the script comments for any version requirements.
+
 ## Overall diagram
 
 ```
