@@ -90,6 +90,15 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		ingress = i
 	}
 
+	// if custom hosts are not enabled all the hosts in the ingress
+	// will be replaced to the generated host
+	if !*c.customHostsEnabled {
+		err := c.replaceCustomHosts(ctx, ingress)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Get the current leaves
 	sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, ingress.Name))
 	if err != nil {
@@ -528,4 +537,47 @@ func removeFinalizer(ingress *networkingv1.Ingress, finalizer string) {
 func ingressKey(ingress *networkingv1.Ingress) interface{} {
 	key, _ := cache.MetaNamespaceKeyFunc(ingress)
 	return cache.ExplicitKey(key)
+}
+
+func (c *Controller) replaceCustomHosts(ctx context.Context, ingress *networkingv1.Ingress) error {
+	generatedHost := ingress.Annotations[cluster.ANNOTATION_HCG_HOST]
+	hosts := []string{}
+	for i, rule := range ingress.Spec.Rules {
+		if rule.Host != generatedHost {
+			ingress.Spec.Rules[i].Host = generatedHost
+			hosts = append(hosts, rule.Host)
+		}
+	}
+
+	// clean up replaced hosts from the tls list
+	removeHostsFromTLS(hosts, ingress)
+
+	if len(hosts) > 0 {
+		ingress.Annotations[cluster.ANNOTATION_HCG_CUSTOM_HOST_REPLACED] = fmt.Sprintf(" replaced custom hosts %v to the glbc host due to custom host policy not being allowed",
+			hosts)
+		if _, err := c.kubeClient.Cluster(ingress.ClusterName).NetworkingV1().Ingresses(ingress.Namespace).Update(ctx, ingress, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func removeHostsFromTLS(hostsToRemove []string, ingress *networkingv1.Ingress) {
+	for _, host := range hostsToRemove {
+		for i, tls := range ingress.Spec.TLS {
+			hosts := tls.Hosts
+			for j, ingressHost := range tls.Hosts {
+				if ingressHost == host {
+					hosts = append(hosts[:j], hosts[j+1:]...)
+				}
+			}
+			// if there are no hosts remaning remove the entry for tls
+			if len(hosts) == 0 {
+				ingress.Spec.TLS[i] = networkingv1.IngressTLS{}
+			} else {
+				ingress.Spec.TLS[i].Hosts = hosts
+			}
+		}
+	}
 }

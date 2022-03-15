@@ -52,6 +52,7 @@ func NewController(config *ControllerConfig) *Controller {
 			hostResolver,
 			net.DefaultInterval,
 		),
+		customHostsEnabled: config.CustomHostsEnabled,
 	}
 	c.hostsWatcher.OnChange = c.synchronisedEnque()
 
@@ -82,6 +83,7 @@ type ControllerConfig struct {
 	TLSEnabled            bool
 	CertProvider          tls.Provider
 	HostResolver          net.HostResolver
+	CustomHostsEnabled    *bool
 }
 
 type Controller struct {
@@ -97,6 +99,7 @@ type Controller struct {
 	tracker               tracker
 	hostResolver          net.HostResolver
 	hostsWatcher          *net.HostsWatcher
+	customHostsEnabled    *bool
 }
 
 func (c *Controller) enqueue(obj interface{}) {
