@@ -78,6 +78,7 @@ kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
 - role: control-plane
+  image: kindest/node:v1.22.7@sha256:1dfd72d193bf7da64765fd2f2898f78663b9ba366c2aa74be1fd7498a1873166
   kubeadmConfigPatches:
   - |
     kind: InitConfiguration
@@ -155,6 +156,9 @@ kubectl apply -f ./config/crd
 ./bin/deployment-splitter --kubeconfig=.kcp/admin.kubeconfig >> ${KCP_LOG_FILE} 2>&1 &
 CONTROLLER_2=$!
 
+echo ""
+echo "KCP PID          : ${KCP_PID}"
+echo "Controller 2 PID : ${CONTROLLER_2}"
 echo ""
 echo "The kind k8s clusters have been registered, and KCP is running, now you should run the kcp-ingress"
 echo "example: "
