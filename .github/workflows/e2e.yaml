@@ -1,0 +1,179 @@
+name: e2e
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - '**.adoc'
+      - '**.md'
+      - 'samples/**'
+      - 'LICENSE'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.adoc'
+      - '**.md'
+      - 'samples/**'
+      - 'LICENSE'
+
+concurrency:
+  group: ${{ github.head_ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  kubernetes:
+
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+      - name: Cleanup
+        run: |
+          ls -lart
+          echo "Initial status:"
+          df -h
+          
+          echo "Cleaning up resources:"
+          sudo swapoff -a
+          sudo rm -f /swapfile
+          sudo apt clean
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          docker rmi $(docker image ls -aq)
+          
+          echo "Final status:"
+          df -h
+      - name: Set Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: v1.17
+      - name: Kubernetes KinD GLBC Cluster
+        uses: helm/kind-action@v1.2.0
+        with:
+          cluster_name: glbc
+          node_image: kindest/node:v1.21.1@sha256:fae9a58f17f18f06aeac9772ca8b5ac680ebbed985e266f711d936e91d113bad
+          version: v0.11.0
+      - name: Kubernetes KinD Cluster 1
+        uses: helm/kind-action@v1.2.0
+        with:
+          cluster_name: cluster1
+          node_image: kindest/node:v1.21.1@sha256:fae9a58f17f18f06aeac9772ca8b5ac680ebbed985e266f711d936e91d113bad
+          version: v0.11.0
+          config: ./e2e/kind.yaml
+      - name: Kubernetes KinD Cluster 2
+        uses: helm/kind-action@v1.2.0
+        with:
+          cluster_name: cluster2
+          node_image: kindest/node:v1.21.1@sha256:fae9a58f17f18f06aeac9772ca8b5ac680ebbed985e266f711d936e91d113bad
+          version: v0.11.0
+          config: ./e2e/kind.yaml
+      - name: Info
+        run: |
+          echo "GLBC cluster:"
+          kubectl --context kind-glbc cluster-info
+          kubectl --context kind-glbc describe nodes
+          
+          echo "Cluster 1:"
+          kubectl --context kind-cluster1 cluster-info
+          kubectl --context kind-cluster1 describe nodes
+          
+          echo "Cluster 2:"
+          kubectl --context kind-cluster2 cluster-info
+          kubectl --context kind-cluster2 describe nodes
+      - name: Run GLBC and KCP
+        run: |
+          echo "Building GLBC"
+          make build
+          
+          echo "Building KCP"
+          make kcp
+          
+          TEMP_DIR="$(pwd)/tmp"
+          
+          CLUSTERS_KUBECONFIG_DIR="${TEMP_DIR}"/clusters
+          mkdir -p "${CLUSTERS_KUBECONFIG_DIR}"
+          echo "CLUSTERS_KUBECONFIG_DIR=${CLUSTERS_KUBECONFIG_DIR}" >> $GITHUB_ENV
+          echo "Creating Cluster manifests in directory ${CLUSTERS_KUBECONFIG_DIR}"
+          kind get kubeconfig --name=cluster1 > "${CLUSTERS_KUBECONFIG_DIR}"/cluster1.yaml
+          kind get kubeconfig --name=cluster2 > "${CLUSTERS_KUBECONFIG_DIR}"/cluster2.yaml
+          
+          echo "Deploying Ingress controller to KinD clusters"
+          VERSION=$(curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/master/stable.txt)
+          
+          kubectl config use-context kind-cluster1
+          curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
+          kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true"
+          
+          kubectl config use-context kind-cluster2
+          curl https://raw.githubusercontent.com/kubernetes/ingress-nginx/"${VERSION}"/deploy/static/provider/kind/deploy.yaml | sed "s/--publish-status-address=localhost/--report-node-internal-ip-address/g" | kubectl apply -f -
+          kubectl annotate ingressclass nginx "ingressclass.kubernetes.io/is-default-class=true"
+          
+          KCP_LOG_FILE="${TEMP_DIR}"/kcp.log
+          echo "KCP_LOG_FILE=${KCP_LOG_FILE}" >> $GITHUB_ENV
+          echo "Starting KCP, sending logs to ${KCP_LOG_FILE}"
+          ./bin/kcp start --push-mode --discovery-poll-interval 3s --run-controllers --resources-to-sync=secrets,deployments,services,ingresses.networking.k8s.io --auto-publish-apis > ${KCP_LOG_FILE} 2>&1 &
+          KCP_PID=$!
+          echo "KCP_PID=${KCP_PID}" >> $GITHUB_ENV
+          
+          echo "Waiting 15 seconds..."
+          sleep 15
+          
+          if ! ps -p ${KCP_PID}; then
+            echo "KCP failed to start, see ${KCP_LOG_FILE} for info."
+            exit 1
+          fi
+          
+          export KUBECONFIG="$(pwd)"/.kcp/admin.kubeconfig
+          echo "Exporting KUBECONFIG=${KUBECONFIG}"
+          echo "KUBECONFIG=${KUBECONFIG}" >> $GITHUB_ENV
+          
+          echo "Creating workspace shard"
+          kubectl create namespace default
+          kubectl create secret generic kubeconfig --from-file=kubeconfig="${KUBECONFIG}"
+          kubectl apply -f e2e/workspace-shard.yaml
+          
+          echo "Registering GLBC APIs"
+          kubectl apply -f ./config/crd
+          
+          GLBC_LOG_FILE="${TEMP_DIR}"/glbc.log
+          echo "GLBC_LOG_FILE=${GLBC_LOG_FILE}" >> $GITHUB_ENV
+          echo "Starting GLBC, sending logs to ${GLBC_LOG_FILE}"
+          ./bin/ingress-controller -kubeconfig .kcp/admin.kubeconfig -glbc-kubeconfig "${HOME}"/.kube/config -dns-provider fake > ${GLBC_LOG_FILE} 2>&1 &
+          GLBC_PID=$!
+          echo "GLBC_PID=${GLBC_PID}" >> $GITHUB_ENV
+          
+          echo "Waiting 15 seconds..."
+          sleep 15
+          
+          if ! ps -p ${GLBC_PID}; then
+            echo "GLBC failed to start, see ${GLBC_LOG_FILE} for info."
+            exit 1
+          fi
+      - name: Run e2e tests
+        run: |
+          export KUBECONFIG=${{ env.KUBECONFIG }}
+          export CLUSTERS_KUBECONFIG_DIR=${{ env.CLUSTERS_KUBECONFIG_DIR }}
+          
+          # Then run e2e tests
+          make e2e
+      - name: Shutdown GLBC
+        if: ${{ always() }}
+        run: |
+          echo "Kill GLBC process"
+          kill ${{ env.GLBC_PID }}
+          
+          echo "Printing GLBC logs"
+          cat ${{ env.GLBC_LOG_FILE }}
+      - name: Shutdown KCP
+        if: ${{ always() }}
+        run: |
+          echo "Kill KCP process"
+          kill ${{ env.KCP_PID }}
+          
+          echo "Printing KCP logs"
+          cat ${{ env.KCP_LOG_FILE }}
