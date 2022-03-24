@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"github.com/kuadrant/kcp-glbc/pkg/reconciler/deployment"
+	"github.com/kuadrant/kcp-glbc/pkg/reconciler/service"
 	"time"
 
 	genericapiserver "k8s.io/apiserver/pkg/server"
@@ -142,6 +144,18 @@ func main() {
 		SharedInformerFactory: kuadrantInformerFactory,
 		DNSProvider:           dnsProvider,
 	})
+
+	serviceController, err := service.NewController(&service.ControllerConfig{
+		ServicesClient:        kubeClient,
+		SharedInformerFactory: kubeInformerFactory,
+	})
+	if err != nil {
+		klog.Fatal(err)
+	}
+	deploymentController, err := deployment.NewController(&deployment.ControllerConfig{
+		DeploymentClient:      kubeClient,
+		SharedInformerFactory: kubeInformerFactory,
+	})
 	if err != nil {
 		klog.Fatal(err)
 	}
@@ -165,6 +179,14 @@ func main() {
 
 	go func() {
 		tlsController.Start(ctx, numThreads)
+	}()
+
+	go func() {
+		serviceController.Start(ctx, numThreads)
+	}()
+
+	go func() {
+		deploymentController.Start(ctx, numThreads)
 	}()
 
 	<-ctx.Done()

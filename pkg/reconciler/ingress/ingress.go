@@ -3,7 +3,10 @@ package ingress
 import (
 	"context"
 	"fmt"
-
+	svc "github.com/kuadrant/kcp-glbc/pkg/reconciler/service"
+	"github.com/kuadrant/kcp-glbc/pkg/util/deleteDelay"
+	"github.com/kuadrant/kcp-glbc/pkg/util/metadata"
+	"github.com/kuadrant/kcp-glbc/pkg/util/slice"
 	"github.com/rs/xid"
 
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +34,7 @@ const (
 )
 
 func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.Ingress) error {
+	klog.Infof("reconciling root ingress: %v", ingress.Name)
 	// is deleting
 	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
 		klog.Infof("deleting root ingress '%v'", ingress.Name)
@@ -44,8 +48,7 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		}
 		klog.Infof("found %v leaf ingresses", len(currentLeaves))
 		for _, leaf := range currentLeaves {
-			err = c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Delete(ctx, leaf.Name, metav1.DeleteOptions{})
-			if err != nil {
+			if err := c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Delete(ctx, leaf.Name, metav1.DeleteOptions{}); err != nil {
 				return err
 			}
 			// delete copied leaf secret
@@ -68,7 +71,7 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		}
 		// all leaves removed, remove finalizer
 		klog.Infof("'%v' ingress leaves cleaned up - removing finalizer", ingress.Name)
-		removeFinalizer(ingress, cascadeCleanupFinalizer)
+		metadata.RemoveFinalizer(ingress, cascadeCleanupFinalizer)
 
 		c.hostsWatcher.StopWatching(ingressKey(ingress))
 		for _, leaf := range currentLeaves {
@@ -78,7 +81,8 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 		return nil
 	}
 
-	AddFinalizer(ingress, cascadeCleanupFinalizer)
+	metadata.AddFinalizer(ingress, cascadeCleanupFinalizer)
+
 	if ingress.Annotations == nil || ingress.Annotations[cluster.ANNOTATION_HCG_HOST] == "" {
 		// Let's assign it a global hostname if any
 		generatedHost := fmt.Sprintf("%s.%s", xid.New(), *c.domain)
@@ -108,10 +112,7 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 	if err != nil {
 		return err
 	}
-	// setup DNS
-	if err := c.ensureDNS(ctx, ingress); err != nil {
-		return err
-	}
+
 	// setup certificates
 	if err := c.ensureCertificate(ctx, ingress); err != nil {
 		return err
@@ -122,12 +123,11 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 	if err != nil {
 		return err
 	}
+	klog.Infof("desired leaves count: %v", len(desiredLeaves))
 
 	// Delete the leaves that are not desired anymore
-	for _, leftover := range findNonDesiredLeaves(currentLeaves, desiredLeaves) {
-		// The clean-up, i.e., removal of the DNS records, will be done in the next reconciliation cycle
-		klog.Infof("Deleting non desired leaf %q", leftover.Name)
-		if err := c.kubeClient.Cluster(leftover.ClusterName).NetworkingV1().Ingresses(leftover.Namespace).Delete(ctx, leftover.Name, metav1.DeleteOptions{}); err != nil {
+	for _, leftover := range findUndesiredLeaves(currentLeaves, desiredLeaves) {
+		if err := c.delayDeleteLeaf(ctx, leftover); err != nil {
 			return err
 		}
 	}
@@ -161,6 +161,11 @@ func (c *Controller) reconcileRoot(ctx context.Context, ingress *networkingv1.In
 				return err
 			}
 		}
+	}
+
+	// update DNS
+	if err := c.ensureDNS(ctx, ingress); err != nil {
+		return err
 	}
 
 	return nil
@@ -292,6 +297,23 @@ func (c *Controller) ensureDNS(ctx context.Context, ingress *networkingv1.Ingres
 	return nil
 }
 
+func (c *Controller) delayDeleteLeaf(ctx context.Context, leaf *networkingv1.Ingress) error {
+	klog.Infof("marking non desired leaf for delayed delete: %q", leaf.Name)
+	obj, err := deleteDelay.SetDefaultDeleteAt(leaf, c.queue)
+	if err != nil {
+		return err
+	}
+	leaf = obj.(*networkingv1.Ingress)
+	if _, err := c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Update(ctx, leaf, metav1.UpdateOptions{}); err != nil {
+		return err
+	}
+	//mark for deletion
+	if err = c.kubeClient.Cluster(leaf.ClusterName).NetworkingV1().Ingresses(leaf.Namespace).Delete(ctx, leaf.Name, metav1.DeleteOptions{}); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress *networkingv1.Ingress) error {
 	// The leaf Ingress was updated, get others and aggregate status.
 	sel, err := labels.Parse(fmt.Sprintf("%s=%s", ownedByLabel, rootName))
@@ -317,20 +339,38 @@ func (c *Controller) reconcileLeaf(ctx context.Context, rootName string, ingress
 		return err
 	}
 
+	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
+		klog.Infof("processing delete for: %v", ingress.Name)
+		if deleteDelay.CanDelete(ingress) {
+			ingress := deleteDelay.CleanForDeletion(ingress).(*networkingv1.Ingress)
+			_, err = c.kubeClient.Cluster(ingress.ClusterName).NetworkingV1().Ingresses(ingress.Namespace).Update(ctx, ingress, metav1.UpdateOptions{})
+			return err
+		}
+		//not ready to delete yet, requeue
+		err = deleteDelay.Requeue(ingress, c.queue)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+
 	if !exists {
 		klog.Infof("deleting orphaned leaf ingress '%v' of missing root ingress '%v'", ingress.Name, rootName)
 		return c.kubeClient.Cluster(ingress.ClusterName).NetworkingV1().Ingresses(ingress.Namespace).Delete(ctx, ingress.Name, metav1.DeleteOptions{})
-	}
-
-	if ingress.DeletionTimestamp != nil && !ingress.DeletionTimestamp.IsZero() {
-		// The Ingress is being deleted. KCP doesn't currently cascade deletion to owned resources
-		removeFinalizer(ingress, cascadeCleanupFinalizer)
 	}
 
 	// Clean the current status, and then recreate if from the other leafs.
 	rootIngress = rootIf.(*networkingv1.Ingress).DeepCopy()
 	rootIngress.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{}
 	for _, o := range others {
+		klog.Infof("updating root ingress %v from leaf: %v, with deletionTimestamp: %v", rootIngress.Name, o.Name, o.DeletionTimestamp)
+		//don't include leaves that are deleting
+		if metadata.HasFinalizer(o, deleteDelay.DeleteAtFinalizer) {
+			klog.Infof("%v is deleting, skipping...", o.Name)
+			continue
+		}
+
+		klog.Infof("adding %v to root ingress", o.Name)
 		// Should the root Ingress status be updated only once the DNS record is successfully created / updated?
 		rootIngress.Status.LoadBalancer.Ingress = append(rootIngress.Status.LoadBalancer.Ingress, o.Status.LoadBalancer.Ingress...)
 	}
@@ -411,20 +451,24 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 		return nil, err
 	}
 
-	var clusters []string
+	klog.Infof("found services count: %v", len(services))
+
+	var locations []string
+	var serviceNames []string
 	for _, service := range services {
-		if service.Labels[clusterLabel] != "" {
-			clusters = append(clusters, service.Labels[clusterLabel])
-		} else {
-			klog.Infof("Skipping service %q because it is not assigned to any cluster", service.Name)
+		serviceLocations, empty := svc.GetLocations(service)
+		if empty {
+			continue
 		}
+		serviceNames = append(serviceNames, service.Name)
+		locations = append(locations, serviceLocations...)
 
 		// Trigger reconciliation of the root ingress when this service changes.
 		c.tracker.add(root, service)
 	}
 
-	desiredLeaves := make([]*networkingv1.Ingress, 0, len(clusters))
-	for _, cl := range clusters {
+	desiredLeaves := make([]*networkingv1.Ingress, 0, len(locations))
+	for _, cl := range locations {
 		vd := root.DeepCopy()
 		// TODO: munge cluster name
 		vd.Name = fmt.Sprintf("%s--%s", root.Name, cl)
@@ -438,6 +482,16 @@ func (c *Controller) desiredLeaves(ctx context.Context, root *networkingv1.Ingre
 		// Cleanup owner references
 		vd.OwnerReferences = []metav1.OwnerReference{}
 		vd.SetResourceVersion("")
+
+		//update ingress paths that point to shadowed services, to point to the shadow for it's cluster
+		for i, rule := range vd.Spec.Rules {
+			for j, path := range rule.HTTP.Paths {
+				if slice.ContainsString(serviceNames, path.Backend.Service.Name) {
+					vd.Spec.Rules[i].HTTP.Paths[j].Backend.Service.Name = fmt.Sprintf("%v--%v", path.Backend.Service.Name, cl)
+				}
+			}
+		}
+
 		if hostname, ok := root.Annotations[cluster.ANNOTATION_HCG_HOST]; ok {
 			// Duplicate the existing rules for the global hostname
 			if c.tlsEnabled {
@@ -473,12 +527,16 @@ func (c *Controller) getServices(ctx context.Context, ingress *networkingv1.Ingr
 	var services []*corev1.Service
 	for _, rule := range ingress.Spec.Rules {
 		for _, path := range rule.HTTP.Paths {
-			svc, err := c.kubeClient.Cluster(ingress.ClusterName).CoreV1().Services(ingress.Namespace).Get(ctx, path.Backend.Service.Name, metav1.GetOptions{})
-			// TODO(jmprusi): If one of the services doesn't exist, we invalidate all the other ones.. review this.
-			if err != nil {
+			klog.Infof("getting service: %v", path.Backend.Service.Name)
+			service, err := c.kubeClient.Cluster(ingress.ClusterName).CoreV1().Services(ingress.Namespace).Get(ctx, path.Backend.Service.Name, metav1.GetOptions{})
+			if err == nil {
+				services = append(services, service)
+			} else if !errors.IsNotFound(err) {
 				return nil, err
+			} else {
+				//ignore service not found errors
+				continue
 			}
-			services = append(services, svc)
 		}
 	}
 	return services, nil
@@ -489,7 +547,7 @@ func (c *Controller) patchIngress(ctx context.Context, ingress *networkingv1.Ing
 		Patch(ctx, ingress.Name, types.MergePatchType, data, metav1.PatchOptions{FieldManager: manager})
 }
 
-func findNonDesiredLeaves(current, desired []*networkingv1.Ingress) []*networkingv1.Ingress {
+func findUndesiredLeaves(current, desired []*networkingv1.Ingress) []*networkingv1.Ingress {
 	var missing []*networkingv1.Ingress
 
 	for _, c := range current {
@@ -513,25 +571,6 @@ func getRootName(ingress *networkingv1.Ingress) (rootName string, isLeaf bool) {
 	}
 
 	return
-}
-
-func AddFinalizer(ingress *networkingv1.Ingress, finalizer string) {
-	for _, v := range ingress.Finalizers {
-		if v == finalizer {
-			return
-		}
-	}
-	ingress.Finalizers = append(ingress.Finalizers, finalizer)
-}
-
-func removeFinalizer(ingress *networkingv1.Ingress, finalizer string) {
-	for i, v := range ingress.Finalizers {
-		if v == finalizer {
-			ingress.Finalizers[i] = ingress.Finalizers[len(ingress.Finalizers)-1]
-			ingress.Finalizers = ingress.Finalizers[:len(ingress.Finalizers)-1]
-			return
-		}
-	}
 }
 
 func ingressKey(ingress *networkingv1.Ingress) interface{} {

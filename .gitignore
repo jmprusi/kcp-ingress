@@ -66,3 +66,7 @@ terraform.rc
 
 # Ignore goland files
 .idea
+
+.env
+
+demo
