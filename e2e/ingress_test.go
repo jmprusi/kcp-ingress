@@ -35,7 +35,7 @@ func TestIngress(t *testing.T) {
 	workspace := test.NewTestWorkspace()
 
 	// Register workload cluster 1 into the test workspace
-	cluster1 := test.NewWorkloadCluster("cluster1", WithKubeConfigByName, InWorkspace(workspace))
+	cluster1 := test.NewWorkloadCluster("kcp-cluster-1", WithKubeConfigByName, InWorkspace(workspace))
 
 	// Wait until cluster 1 is ready
 	test.Eventually(WorkloadCluster(test, cluster1.ClusterName, cluster1.Name)).Should(WithTransform(
@@ -73,12 +73,22 @@ func TestIngress(t *testing.T) {
 
 	// Wait until the root Ingress is reconciled with the load balancer Ingresses
 	test.Eventually(Ingress(test, namespace, name)).WithTimeout(TestTimeoutMedium).Should(And(
-		WithTransform(Annotations, HaveKey(kuadrantcluster.ANNOTATION_HCG_HOST)),
+		WithTransform(Annotations, And(
+			HaveKey(kuadrantcluster.ANNOTATION_HCG_HOST),
+			HaveKey(kuadrantcluster.ANNOTATION_HCG_CUSTOM_HOST_REPLACED)),
+		),
 		WithTransform(LoadBalancerIngresses, HaveLen(1)),
 	))
 
 	// Retrieve the root Ingress
 	ingress := GetIngress(test, namespace, name)
+
+	// Check the host value is being replaced with the generated host
+	test.Expect(ingress.Spec.Rules).To(MatchFields(IgnoreExtras,
+		Fields{
+			"Hosts": Equal(ingress.Annotations[kuadrantcluster.ANNOTATION_HCG_HOST]),
+		}),
+	)
 
 	// Check a DNSRecord for the root Ingress is created with the expected Spec
 	test.Eventually(DNSRecord(test, namespace, name)).Should(PointTo(MatchFields(IgnoreExtras, Fields{
@@ -92,7 +102,7 @@ func TestIngress(t *testing.T) {
 	})))
 
 	// Register workload cluster 2 into the test workspace
-	cluster2 := test.NewWorkloadCluster("cluster2", WithKubeConfigByName, InWorkspace(workspace))
+	cluster2 := test.NewWorkloadCluster("kcp-cluster-2", WithKubeConfigByName, InWorkspace(workspace))
 
 	// Wait until cluster 2 is ready
 	test.Eventually(WorkloadCluster(test, cluster1.ClusterName, cluster1.Name)).Should(WithTransform(
@@ -144,6 +154,7 @@ func ingressConfiguration(namespace, name string, services ...string) *networkin
 	var rules []*networkingv1apply.IngressRuleApplyConfiguration
 	for _, service := range services {
 		rule := networkingv1apply.IngressRule().
+			WithHost("test.gblb.com").
 			WithHTTP(networkingv1apply.HTTPIngressRuleValue().
 				WithPaths(networkingv1apply.HTTPIngressPath().
 					WithPath("/").
