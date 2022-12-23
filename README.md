@@ -1,3 +1,9 @@
+# This repo is archived, for an up-to-date KCP loadbalancer solution goto: https://github.com/kcp-dev/kcp-glbc/
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 # KCP Ingress
 
 PoC related to <https://github.com/kcp-dev/kcp/issues/75>
